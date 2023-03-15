@@ -76,7 +76,6 @@ impl Thread {
                     }
                 }
             }
-
             messages.insert(message.id, message);
         }
 
@@ -375,6 +374,9 @@ impl serenity::client::EventHandler for Handler {
                 thread.as_mut().unwrap()
             };
 
+            while thread.messages.len() >= MAX_MESSAGE_BUFFER {
+                thread.messages.pop_first();
+            }
             thread.messages.insert(new_message.id, new_message.clone());
 
             if !should_reply || !can_reply {
