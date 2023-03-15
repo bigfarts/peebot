@@ -68,7 +68,7 @@ impl Thread {
         while let Some(message) = messages_it.next().await {
             let message = message?;
             if message.id.0 == id.0 {
-                continue;
+                break;
             }
 
             if message.author.id == me_id {
@@ -76,7 +76,7 @@ impl Thread {
                     if interaction.kind
                     == serenity::model::application::interaction::InteractionType::ApplicationCommand
                     && interaction.name == FORGET_COMMAND_NAME {
-                        continue;
+                        break;
                     }
                 }
             }
