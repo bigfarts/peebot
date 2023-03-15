@@ -87,27 +87,14 @@ pub enum Error {
 impl ChatClient {
     pub fn new(api_key: impl AsRef<str>) -> Self {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
-        );
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", api_key.as_ref()).parse().unwrap(),
-        );
+        headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert(reqwest::header::AUTHORIZATION, format!("Bearer {}", api_key.as_ref()).parse().unwrap());
         ChatClient {
-            client: reqwest::ClientBuilder::new()
-                .default_headers(headers)
-                .build()
-                .unwrap(),
+            client: reqwest::ClientBuilder::new().default_headers(headers).build().unwrap(),
         }
     }
 
-    pub async fn request(
-        &self,
-        req: &ChatRequest,
-    ) -> Result<impl futures_core::stream::Stream<Item = Result<Chunk, Error>>, reqwest::Error>
-    {
+    pub async fn request(&self, req: &ChatRequest) -> Result<impl futures_core::stream::Stream<Item = Result<Chunk, Error>>, reqwest::Error> {
         let mut req = req.clone();
         req.stream = true;
 
@@ -151,21 +138,20 @@ impl ChatClient {
 }
 
 pub fn count_tokens(tokenizer: &tiktoken_rs::CoreBPE, messages: &[Message]) -> usize {
-    let mut n = 0;
-    for message in messages {
-        n += 4; // every message follows <im_start>{role/name}\n{content}<im_end>\n
-        n += tokenizer
-            .encode_ordinary(&serde_plain::to_string(&message.role).unwrap())
-            .len();
-        if let Some(name) = message.name.as_ref() {
-            // if there's a name, the role is omitted
-            // role is always required and always 1 token
-            n -= 1;
-            n += tokenizer.encode_ordinary(&name).len();
-        }
-        // every reply is primed with <im_start>assistant
-        n += tokenizer.encode_ordinary(&message.content).len();
+    // every reply is primed with <im_start>assistant
+    messages.iter().map(|m| count_message_tokens(tokenizer, m)).sum::<usize>() + 2
+}
+
+pub fn count_message_tokens(tokenizer: &tiktoken_rs::CoreBPE, message: &Message) -> usize {
+    // every message follows <im_start>{role/name}\n{content}<im_end>\n
+    let mut n = 4;
+    n += tokenizer.encode_ordinary(&serde_plain::to_string(&message.role).unwrap()).len();
+    if let Some(name) = message.name.as_ref() {
+        // if there's a name, the role is omitted
+        // role is always required and always 1 token
+        n -= 1;
+        n += tokenizer.encode_ordinary(&name).len();
     }
-    n += 2;
+    n += tokenizer.encode_ordinary(&message.content).len();
     n
 }

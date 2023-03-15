@@ -3,7 +3,6 @@ mod unichunk;
 
 use clap::Parser;
 use futures_util::StreamExt;
-use handlebars::Renderable;
 
 const MAX_MESSAGE_BUFFER: usize = 2048;
 
@@ -15,7 +14,7 @@ enum ThreadMode {
 
 #[derive(Debug)]
 struct ChatSettings {
-    system_message_format: handlebars::Template,
+    system_message: String,
     model_settings: ModelSettings,
 }
 
@@ -30,11 +29,8 @@ impl ChatSettings {
             .collect::<Vec<_>>();
 
         Ok(ChatSettings {
-            system_message_format: handlebars::Template::compile(parts[0].unwrap())?,
-            model_settings: parts[1].map_or_else(
-                || Ok(ModelSettings::default()),
-                |v| toml::from_str::<ModelSettings>(v),
-            )?,
+            system_message: parts[0].unwrap().to_string(),
+            model_settings: parts[1].map_or_else(|| Ok(ModelSettings::default()), |v| toml::from_str::<ModelSettings>(v))?,
         })
     }
 }
@@ -51,10 +47,7 @@ struct ModelSettings {
 #[derive(Debug)]
 struct Thread {
     primary_message: serenity::model::channel::Message,
-    messages: std::collections::BTreeMap<
-        serenity::model::id::MessageId,
-        serenity::model::channel::Message,
-    >,
+    messages: std::collections::BTreeMap<serenity::model::id::MessageId, serenity::model::channel::Message>,
     mode: ThreadMode,
 }
 
@@ -76,9 +69,9 @@ impl Thread {
 
             if message.author.id == me_id {
                 if let Some(interaction) = message.interaction.as_ref() {
-                    if interaction.kind
-                    == serenity::model::application::interaction::InteractionType::ApplicationCommand
-                    && interaction.name == FORGET_COMMAND_NAME {
+                    if interaction.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
+                        && interaction.name == FORGET_COMMAND_NAME
+                    {
                         break;
                     }
                 }
@@ -87,9 +80,7 @@ impl Thread {
             messages.insert(message.id, message);
         }
 
-        let channel = if let serenity::model::prelude::Channel::Guild(guild_channel) =
-            http.as_ref().get_channel(id.0).await?
-        {
+        let channel = if let serenity::model::prelude::Channel::Guild(guild_channel) = http.as_ref().get_channel(id.0).await? {
             guild_channel
         } else {
             unreachable!();
@@ -110,32 +101,16 @@ impl Thread {
 }
 
 struct Handler {
-    handlebars: handlebars::Handlebars<'static>,
-    nicknames: tokio::sync::Mutex<
-        std::collections::HashMap<
-            (serenity::model::id::GuildId, serenity::model::id::UserId),
-            String,
-        >,
-    >,
+    nicknames: tokio::sync::Mutex<std::collections::HashMap<(serenity::model::id::GuildId, serenity::model::id::UserId), String>>,
     me_id: parking_lot::Mutex<serenity::model::id::UserId>,
     tokenizer: tiktoken_rs::CoreBPE,
     config: Config,
     chat_client: openai::ChatClient,
-    threads: tokio::sync::Mutex<
-        std::collections::HashMap<
-            serenity::model::id::ChannelId,
-            std::sync::Arc<tokio::sync::Mutex<Option<Thread>>>,
-        >,
-    >,
+    threads: tokio::sync::Mutex<std::collections::HashMap<serenity::model::id::ChannelId, std::sync::Arc<tokio::sync::Mutex<Option<Thread>>>>>,
 }
 
 static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
-    once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(
-            r"<@!?(?P<user_id>\d+)>|<a?:(?P<emoji_name>\w+):\d+>|<#(?P<channel_id>\d+)>",
-        )
-        .unwrap()
-    });
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"<@!?(?P<user_id>\d+)>|<a?:(?P<emoji_name>\w+):\d+>|<#(?P<channel_id>\d+)>").unwrap());
 
 static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\s*<@!?(?P<user_id>\d+)>\s*").unwrap());
@@ -173,8 +148,7 @@ impl Handler {
 
             let repl = if let Some(subm) = capture.name("user_id") {
                 let user_id = subm.as_str().parse::<u64>().unwrap();
-                self.resolve_display_name(&http, guild_id, user_id.into())
-                    .await?
+                self.resolve_display_name(&http, guild_id, user_id.into()).await?
             } else if let Some(subm) = capture.name("emoji_name") {
                 format!(":{}:", subm.as_str())
             } else if let Some(subm) = capture.name("channel_id") {
@@ -195,21 +169,14 @@ const FORGET_COMMAND_NAME: &str = "forget";
 
 #[async_trait::async_trait]
 impl serenity::client::EventHandler for Handler {
-    async fn ready(
-        &self,
-        ctx: serenity::client::Context,
-        data_about_bot: serenity::model::gateway::Ready,
-    ) {
+    async fn ready(&self, ctx: serenity::client::Context, data_about_bot: serenity::model::gateway::Ready) {
         if let Err(e) = (|| async {
             *self.me_id.lock() = data_about_bot.user.id;
-            serenity::model::application::command::Command::create_global_application_command(
-                &ctx.http,
-                |command| {
-                    command
-                        .name(FORGET_COMMAND_NAME)
-                        .description("Add a break in the chat log to forget everything before it.")
-                },
-            )
+            serenity::model::application::command::Command::create_global_application_command(&ctx.http, |command| {
+                command
+                    .name(FORGET_COMMAND_NAME)
+                    .description("Add a break in the chat log to forget everything before it.")
+            })
             .await?;
 
             Ok::<_, anyhow::Error>(())
@@ -220,11 +187,7 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn interaction_create(
-        &self,
-        ctx: serenity::client::Context,
-        interaction: serenity::model::application::interaction::Interaction,
-    ) {
+    async fn interaction_create(&self, ctx: serenity::client::Context, interaction: serenity::model::application::interaction::Interaction) {
         if let Err(e) = (|| async {
             let app_command = if let Some(app_command) = interaction.application_command() {
                 app_command
@@ -244,8 +207,7 @@ impl serenity::client::EventHandler for Handler {
 
             let mut thread = thread.lock().await;
 
-            if app_command.kind
-                == serenity::model::application::interaction::InteractionType::ApplicationCommand
+            if app_command.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
                 && app_command.data.name == FORGET_COMMAND_NAME
             {
                 log::info!("thread {} flushed for forget", app_command.channel_id);
@@ -273,27 +235,16 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn guild_create(
-        &self,
-        _ctx: serenity::client::Context,
-        guild: serenity::model::guild::Guild,
-    ) {
+    async fn guild_create(&self, _ctx: serenity::client::Context, guild: serenity::model::guild::Guild) {
         if let Err(e) = (|| async {
             let mut threads = self.threads.lock().await;
             for thread in guild.threads.iter() {
-                if thread.parent_id
-                    != Some(serenity::model::id::ChannelId(
-                        self.config.parent_channel_id,
-                    ))
-                {
+                if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
                     continue;
                 }
 
                 log::info!("thread {} scheduled for load", thread.id);
-                threads.insert(
-                    thread.id,
-                    std::sync::Arc::new(tokio::sync::Mutex::new(None)),
-                );
+                threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(None)));
             }
 
             Ok::<_, anyhow::Error>(())
@@ -304,19 +255,11 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn thread_create(
-        &self,
-        ctx: serenity::client::Context,
-        thread: serenity::model::channel::GuildChannel,
-    ) {
+    async fn thread_create(&self, ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
 
-            if thread.parent_id
-                != Some(serenity::model::id::ChannelId(
-                    self.config.parent_channel_id,
-                ))
-            {
+            if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
                 return Ok(());
             }
 
@@ -327,17 +270,10 @@ impl serenity::client::EventHandler for Handler {
             thread.id.join_thread(&ctx.http).await?;
 
             let thread_info = Thread::new(&ctx.http, me_id, thread.id).await?;
-            log::info!(
-                "thread {} joined: {:?}",
-                thread.id,
-                thread_info.primary_message
-            );
+            log::info!("thread {} joined: {:?}", thread.id, thread_info.primary_message);
 
             let mut threads = self.threads.lock().await;
-            threads.insert(
-                thread.id,
-                std::sync::Arc::new(tokio::sync::Mutex::new(Some(thread_info))),
-            );
+            threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(Some(thread_info))));
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -347,17 +283,9 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn thread_update(
-        &self,
-        _ctx: serenity::client::Context,
-        thread: serenity::model::channel::GuildChannel,
-    ) {
+    async fn thread_update(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
-            if thread.parent_id
-                != Some(serenity::model::id::ChannelId(
-                    self.config.parent_channel_id,
-                ))
-            {
+            if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
                 return Ok(());
             }
 
@@ -367,10 +295,7 @@ impl serenity::client::EventHandler for Handler {
                 threads.remove(&thread.id);
             } else {
                 log::info!("thread {} flushed due to update", thread.id);
-                threads.insert(
-                    thread.id,
-                    std::sync::Arc::new(tokio::sync::Mutex::new(None)),
-                );
+                threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(None)));
             }
 
             Ok::<_, anyhow::Error>(())
@@ -381,11 +306,7 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn thread_delete(
-        &self,
-        _ctx: serenity::client::Context,
-        thread: serenity::model::channel::PartialGuildChannel,
-    ) {
+    async fn thread_delete(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::PartialGuildChannel) {
         if let Err(e) = (|| async {
             let mut threads = self.threads.lock().await;
             log::info!("thread {} deleted", thread.id);
@@ -398,17 +319,10 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn guild_member_update(
-        &self,
-        _ctx: serenity::client::Context,
-        event: serenity::model::event::GuildMemberUpdateEvent,
-    ) {
+    async fn guild_member_update(&self, _ctx: serenity::client::Context, event: serenity::model::event::GuildMemberUpdateEvent) {
         if let Err(e) = (|| async {
             let mut nicknames = self.nicknames.lock().await;
-            nicknames.insert(
-                (event.guild_id, event.user.id),
-                event.nick.unwrap_or(event.user.name),
-            );
+            nicknames.insert((event.guild_id, event.user.id), event.nick.unwrap_or(event.user.name));
             Ok::<_, anyhow::Error>(())
         })()
         .await
@@ -417,11 +331,7 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn message(
-        &self,
-        ctx: serenity::client::Context,
-        new_message: serenity::model::channel::Message,
-    ) {
+    async fn message(&self, ctx: serenity::client::Context, new_message: serenity::model::channel::Message) {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
 
@@ -435,8 +345,7 @@ impl serenity::client::EventHandler for Handler {
                 thread.clone()
             };
 
-            let should_reply =
-                new_message.author.id != me_id && new_message.mentions_user_id(me_id);
+            let should_reply = new_message.author.id != me_id && new_message.mentions_user_id(me_id);
             let can_reply = thread.try_lock().is_ok();
 
             if should_reply && !can_reply {
@@ -444,11 +353,10 @@ impl serenity::client::EventHandler for Handler {
                     .channel_id
                     .send_message(&ctx.http, |m| {
                         m.embed(|e| {
-                            e.color(serenity::utils::colours::css::WARNING);
-                            e.description("I'm already replying, please wait for me to finish!");
-                            e
-                        });
-                        m
+                            e.color(serenity::utils::colours::css::WARNING)
+                                .description("I'm already replying, please wait for me to finish!")
+                        })
+                        .reference_message(&new_message)
                     })
                     .await?;
             }
@@ -476,53 +384,28 @@ impl serenity::client::EventHandler for Handler {
             if let Err(e) = (|| async {
                 let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-                let system_message = {
-                    let mut output = handlebars::StringOutput::new();
-
-                    #[derive(serde::Serialize)]
-                    struct SystemMessageFormatArgs {
-                        display_name: String,
-                        timestamp: String,
-                    }
-
-                    settings.system_message_format.render(
-                        &self.handlebars,
-                        &handlebars::Context::wraps(SystemMessageFormatArgs {
-                            display_name: self
-                                .resolve_display_name(
-                                    &ctx.http,
-                                    new_message.guild_id.unwrap(),
-                                    me_id,
-                                )
+                let system_message = openai::Message {
+                    role: openai::Role::System,
+                    name: None,
+                    content: if thread.mode == ThreadMode::Multi {
+                        format!(
+                            "You are {}.\n\n{}\n\nDo not prefix your replies with your name and timestamp.",
+                            self.resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), me_id,)
                                 .await
                                 .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
-                            timestamp: new_message
-                                .timestamp
-                                .with_timezone(&chrono::Utc)
-                                .to_rfc3339(),
-                        })?,
-                        &mut handlebars::RenderContext::new(None),
-                        &mut output,
-                    )?;
-
-                    let mut content = output.into_string()?;
-                    if thread.mode == ThreadMode::Multi {
-                        content.push_str(
-                            "\n\nDo not prefix your replies with your nickname and timestamp.",
-                        );
-                    }
-
-                    openai::Message {
-                        role: openai::Role::System,
-                        name: None,
-                        content,
-                    }
+                            settings.system_message
+                        )
+                    } else {
+                        settings.system_message.clone()
+                    },
                 };
 
                 let mut messages = vec![];
 
+                // every reply is primed with <im_start>assistant
+                let mut input_tokens = 2 + openai::count_message_tokens(&self.tokenizer, &system_message);
+
                 for (_, message) in thread.messages.iter().rev() {
-                    let mut next_messages = messages.clone();
                     if message.content.is_empty() {
                         continue;
                     }
@@ -534,69 +417,55 @@ impl serenity::client::EventHandler for Handler {
                             content: message.content.clone(),
                         }
                     } else {
-                        let content = match thread.mode {
-                            ThreadMode::Single => {
-                                if !message.mentions_user_id(me_id) {
-                                    continue;
-                                }
-                                STRIP_SINGLE_USER_REGEX
-                                    .replace(&message.content, |c: &regex::Captures| {
-                                        if serenity::model::id::UserId(
-                                            c["user_id"].parse::<u64>().unwrap(),
-                                        ) == me_id
-                                        {
-                                            "".to_string()
-                                        } else {
-                                            c[0].to_string()
-                                        }
-                                    })
-                                    .to_string()
-                            }
-                            ThreadMode::Multi => format!(
-                                "{} at {} said:\n{}",
-                                self.resolve_display_name(
-                                    &ctx.http,
-                                    new_message.guild_id.unwrap(),
-                                    message.author.id,
-                                )
-                                .await
-                                .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
-                                new_message
-                                    .timestamp
-                                    .with_timezone(&chrono::Utc)
-                                    .to_rfc3339(),
-                                message.content
-                            ),
-                        };
-
-                        let content = self
-                            .resolve_message(&ctx.http, new_message.guild_id.unwrap(), &content)
-                            .await
-                            .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?;
-
                         openai::Message {
                             role: openai::Role::User,
                             name: None,
-                            content,
+                            content: match thread.mode {
+                                ThreadMode::Single => {
+                                    if !message.mentions_user_id(me_id) {
+                                        continue;
+                                    }
+
+                                    self.resolve_message(
+                                        &ctx.http,
+                                        new_message.guild_id.unwrap(),
+                                        &STRIP_SINGLE_USER_REGEX.replace(&message.content, |c: &regex::Captures| {
+                                            if serenity::model::id::UserId(c["user_id"].parse::<u64>().unwrap()) == me_id {
+                                                "".to_string()
+                                            } else {
+                                                c[0].to_string()
+                                            }
+                                        }),
+                                    )
+                                    .await
+                                    .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?
+                                }
+                                ThreadMode::Multi => format!(
+                                    "{} at {} said:\n{}",
+                                    self.resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), message.author.id,)
+                                        .await
+                                        .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
+                                    new_message.timestamp.with_timezone(&chrono::Utc).to_rfc3339(),
+                                    self.resolve_message(&ctx.http, new_message.guild_id.unwrap(), &message.content)
+                                        .await
+                                        .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?
+                                ),
+                            },
                         }
                     };
 
-                    next_messages.push(oai_message.clone());
-                    next_messages.push(system_message.clone());
+                    let message_tokens = openai::count_message_tokens(&self.tokenizer, &oai_message);
 
-                    if openai::count_tokens(&self.tokenizer, &next_messages)
-                        > self.config.max_input_tokens as usize
-                    {
+                    if input_tokens + message_tokens > self.config.max_input_tokens as usize {
                         break;
                     }
 
                     messages.push(oai_message);
+                    input_tokens += message_tokens;
                 }
 
                 messages.push(system_message);
                 messages.reverse();
-
-                let input_tokens = openai::count_tokens(&self.tokenizer, &messages) as u32;
 
                 let req = openai::ChatRequest {
                     messages,
@@ -606,26 +475,22 @@ impl serenity::client::EventHandler for Handler {
                     top_p: settings.model_settings.top_p,
                     frequency_penalty: settings.model_settings.frequency_penalty,
                     presence_penalty: settings.model_settings.presence_penalty,
-                    max_tokens: Some(self.config.max_tokens - input_tokens),
+                    max_tokens: Some(self.config.max_tokens - input_tokens as u32),
                 };
                 log::info!("{:#?}", req);
 
-                let _typing = new_message.channel_id.start_typing(&ctx.http)?;
+                let mut typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
 
                 let mut stream = Box::pin(
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        self.chat_client.request(&req),
-                    )
-                    .await
-                    .map_err(|e| anyhow::format_err!("timed out: {}", e))??,
+                    tokio::time::timeout(std::time::Duration::from_secs(30), self.chat_client.request(&req))
+                        .await
+                        .map_err(|e| anyhow::format_err!("timed out: {}", e))??,
                 );
 
                 let mut chunker = unichunk::Chunker::new(2000);
-                while let Some(chunk) =
-                    tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
-                        .await
-                        .map_err(|e| anyhow::format_err!("timed out: {}", e))?
+                while let Some(chunk) = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
+                    .await
+                    .map_err(|e| anyhow::format_err!("timed out: {}", e))?
                 {
                     let chunk = chunk?;
                     let delta = &chunk.choices[0].delta;
@@ -635,25 +500,23 @@ impl serenity::client::EventHandler for Handler {
                         continue;
                     };
                     for c in chunker.push(&content) {
+                        typing.take();
                         new_message
                             .channel_id
-                            .send_message(&ctx.http, |m| {
-                                m.content(&c);
-                                m
-                            })
+                            .send_message(&ctx.http, |m| m.content(&c).reference_message(&new_message))
                             .await
                             .map_err(|e| anyhow::format_err!("send_message: {}", e))?;
+                        typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
                     }
                 }
+
+                typing.take();
 
                 let c = chunker.flush();
                 if !c.is_empty() {
                     new_message
                         .channel_id
-                        .send_message(&ctx.http, |m| {
-                            m.content(&c);
-                            m
-                        })
+                        .send_message(&ctx.http, |m| m.content(&c).reference_message(&new_message))
                         .await
                         .map_err(|e| anyhow::format_err!("send_message: {}", e))?;
                 }
@@ -670,6 +533,7 @@ impl serenity::client::EventHandler for Handler {
                                 .color(serenity::utils::colours::css::DANGER)
                                 .description(format!("{:?}", e))
                         })
+                        .reference_message(&new_message)
                     })
                     .await
                     .map_err(|send_e| anyhow::format_err!("send error: {} ({})", send_e, e))?;
@@ -684,11 +548,7 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn message_update(
-        &self,
-        _ctx: serenity::client::Context,
-        new_event: serenity::model::event::MessageUpdateEvent,
-    ) {
+    async fn message_update(&self, _ctx: serenity::client::Context, new_event: serenity::model::event::MessageUpdateEvent) {
         if let Err(e) = (|| async {
             let thread = {
                 let threads = self.threads.lock().await;
@@ -853,9 +713,7 @@ struct Config {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::builder()
-        .filter_module("peebot", log::LevelFilter::Info)
-        .init();
+    env_logger::builder().filter_module("peebot", log::LevelFilter::Info).init();
 
     log::info!("hello!");
 
@@ -876,7 +734,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     serenity::client::ClientBuilder::new(&config.discord_token, intents)
         .event_handler(Handler {
-            handlebars,
             nicknames: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
             tokenizer: tiktoken_rs::cl100k_base().unwrap(),
