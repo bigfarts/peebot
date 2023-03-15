@@ -92,7 +92,10 @@ struct Handler {
     config: Config,
     chat_client: openai::ChatClient,
     threads: tokio::sync::Mutex<
-        std::collections::HashMap<serenity::model::id::ChannelId, Option<Thread>>,
+        std::collections::HashMap<
+            serenity::model::id::ChannelId,
+            std::sync::Arc<tokio::sync::Mutex<Option<Thread>>>,
+        >,
     >,
 }
 
@@ -185,7 +188,10 @@ impl serenity::client::EventHandler for Handler {
                 }
 
                 log::info!("thread {} scheduled for load", thread.id);
-                threads.insert(thread.id, None);
+                threads.insert(
+                    thread.id,
+                    std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+                );
             }
 
             Ok::<_, anyhow::Error>(())
@@ -216,7 +222,6 @@ impl serenity::client::EventHandler for Handler {
 
             thread.id.join_thread(&ctx.http).await?;
 
-            let mut threads = self.threads.lock().await;
             let thread_info = Thread::new(&ctx.http, thread.id).await?;
             log::info!(
                 "thread {} joined: {:?}",
@@ -224,7 +229,11 @@ impl serenity::client::EventHandler for Handler {
                 thread_info.primary_message
             );
 
-            threads.insert(thread.id, Some(thread_info));
+            let mut threads = self.threads.lock().await;
+            threads.insert(
+                thread.id,
+                std::sync::Arc::new(tokio::sync::Mutex::new(Some(thread_info))),
+            );
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -257,7 +266,7 @@ impl serenity::client::EventHandler for Handler {
                     std::collections::hash_map::Entry::Occupied(_) => {}
                     std::collections::hash_map::Entry::Vacant(e) => {
                         log::info!("thread {} scheduled for load", thread.id);
-                        e.insert(None);
+                        e.insert(std::sync::Arc::new(tokio::sync::Mutex::new(None)));
                     }
                 }
             }
@@ -314,14 +323,34 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
 
-            let mut threads = self.threads.lock().await;
-            let thread = if let Some(thread) = threads.get_mut(&new_message.channel_id) {
-                thread
-            } else {
-                return Ok(());
+            let thread = {
+                let threads = self.threads.lock().await;
+                let thread = if let Some(thread) = threads.get(&new_message.channel_id) {
+                    thread
+                } else {
+                    return Ok(());
+                };
+                thread.clone()
             };
 
-            let thread = if let Some(thread) = thread {
+            let can_reply = thread.try_lock().is_ok();
+            if !can_reply {
+                new_message
+                    .channel_id
+                    .send_message(&ctx.http, |m| {
+                        m.embed(|e| {
+                            e.color(serenity::utils::colours::css::WARNING);
+                            e.description("I'm already replying, please wait for me to finish!");
+                            e
+                        });
+                        m
+                    })
+                    .await?;
+            }
+
+            let mut thread = thread.lock().await;
+
+            let thread = if let Some(thread) = thread.as_mut() {
                 thread
             } else {
                 log::info!("thread {} loaded", new_message.channel_id);
@@ -331,7 +360,7 @@ impl serenity::client::EventHandler for Handler {
 
             thread.messages.insert(new_message.id, new_message.clone());
 
-            if !new_message.mentions_user_id(me_id) {
+            if !can_reply || !new_message.mentions_user_id(me_id) {
                 return Ok(());
             }
 
@@ -476,7 +505,7 @@ impl serenity::client::EventHandler for Handler {
                 };
                 log::info!("{:#?}", req);
 
-                let typing = new_message.channel_id.start_typing(&ctx.http)?;
+                let _typing = new_message.channel_id.start_typing(&ctx.http)?;
 
                 let mut stream = Box::pin(
                     tokio::time::timeout(
@@ -531,7 +560,7 @@ impl serenity::client::EventHandler for Handler {
                     .send_message(&ctx.http, |m| {
                         m.embed(|e| {
                             e.title("Error");
-                            e.color(serenity::utils::Color::RED);
+                            e.color(serenity::utils::colours::css::DANGER);
                             e.description(format!("{:?}", e));
                             e
                         });
@@ -555,11 +584,18 @@ impl serenity::client::EventHandler for Handler {
         new_event: serenity::model::event::MessageUpdateEvent,
     ) {
         if let Err(e) = (|| async {
-            let mut threads = self.threads.lock().await;
-            let thread = if let Some(thread) = threads
-                .get_mut(&new_event.channel_id)
-                .and_then(|v| v.as_mut())
-            {
+            let thread = {
+                let threads = self.threads.lock().await;
+                let thread = if let Some(thread) = threads.get(&new_event.channel_id) {
+                    thread
+                } else {
+                    return Ok(());
+                };
+                thread.clone()
+            };
+
+            let mut thread = thread.lock().await;
+            let thread = if let Some(thread) = thread.as_mut() {
                 thread
             } else {
                 return Ok(());
@@ -631,9 +667,18 @@ impl serenity::client::EventHandler for Handler {
         _guild_id: Option<serenity::model::id::GuildId>,
     ) {
         if let Err(e) = (|| async {
-            let mut threads = self.threads.lock().await;
-            let thread = if let Some(thread) = threads.get_mut(&channel_id).and_then(|v| v.as_mut())
-            {
+            let thread = {
+                let threads = self.threads.lock().await;
+                let thread = if let Some(thread) = threads.get(&channel_id) {
+                    thread
+                } else {
+                    return Ok(());
+                };
+                thread.clone()
+            };
+
+            let mut thread = thread.lock().await;
+            let thread = if let Some(thread) = thread.as_mut() {
                 thread
             } else {
                 return Ok(());
@@ -657,9 +702,18 @@ impl serenity::client::EventHandler for Handler {
         _guild_id: Option<serenity::model::id::GuildId>,
     ) {
         if let Err(e) = (|| async {
-            let mut threads = self.threads.lock().await;
-            let thread = if let Some(thread) = threads.get_mut(&channel_id).and_then(|v| v.as_mut())
-            {
+            let thread = {
+                let threads = self.threads.lock().await;
+                let thread = if let Some(thread) = threads.get(&channel_id) {
+                    thread
+                } else {
+                    return Ok(());
+                };
+                thread.clone()
+            };
+
+            let mut thread = thread.lock().await;
+            let thread = if let Some(thread) = thread.as_mut() {
                 thread
             } else {
                 return Ok(());
