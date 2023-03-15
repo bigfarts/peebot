@@ -274,6 +274,7 @@ impl serenity::client::EventHandler for Handler {
             }
 
             thread.id.join_thread(&ctx.http).await?;
+            let _ = thread.id.pin(&ctx.http, serenity::model::id::MessageId(thread.id.0)).await;
 
             let thread_info = Thread::new(&ctx.http, me_id, thread.id).await?;
             log::info!("thread {} joined: {:?}", thread.id, thread_info.primary_message);
