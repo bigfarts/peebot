@@ -241,13 +241,15 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn guild_create(&self, _ctx: serenity::client::Context, guild: serenity::model::guild::Guild) {
+    async fn guild_create(&self, ctx: serenity::client::Context, guild: serenity::model::guild::Guild) {
         if let Err(e) = (|| async {
             let mut threads = self.threads.lock().await;
             for thread in guild.threads.iter() {
                 if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
                     continue;
                 }
+
+                thread.id.join_thread(&ctx.http).await?;
 
                 log::info!("thread {} scheduled for load", thread.id);
                 threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(None)));
