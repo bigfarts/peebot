@@ -336,8 +336,10 @@ impl serenity::client::EventHandler for Handler {
                 thread.clone()
             };
 
+            let should_reply = new_message.mentions_user_id(me_id);
             let can_reply = thread.try_lock().is_ok();
-            if !can_reply {
+
+            if should_reply && !can_reply {
                 new_message
                     .channel_id
                     .send_message(&ctx.http, |m| {
@@ -363,7 +365,7 @@ impl serenity::client::EventHandler for Handler {
 
             thread.messages.insert(new_message.id, new_message.clone());
 
-            if !can_reply || !new_message.mentions_user_id(me_id) {
+            if !should_reply || !can_reply {
                 return Ok(());
             }
 
