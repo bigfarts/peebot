@@ -443,7 +443,11 @@ impl serenity::client::EventHandler for Handler {
                 thread
             } else {
                 log::info!("thread {} loaded", new_message.channel_id);
-                *thread = Some(Thread::new(&ctx.http, me_id, new_message.channel_id).await?);
+                *thread = Some(
+                    Thread::new(&ctx.http, me_id, new_message.channel_id)
+                        .await
+                        .map_err(|e| anyhow::format_err!("Thread::new: {}", e))?,
+                );
                 thread.as_mut().unwrap()
             };
 
@@ -474,7 +478,8 @@ impl serenity::client::EventHandler for Handler {
                                     new_message.guild_id.unwrap(),
                                     me_id,
                                 )
-                                .await?,
+                                .await
+                                .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
                             timestamp: new_message
                                 .timestamp
                                 .with_timezone(&chrono::Utc)
@@ -528,7 +533,8 @@ impl serenity::client::EventHandler for Handler {
                         }
                         content = self
                             .resolve_message(&ctx.http, new_message.guild_id.unwrap(), &content)
-                            .await?;
+                            .await
+                            .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?;
 
                         let mut output = handlebars::StringOutput::new();
 
@@ -548,7 +554,10 @@ impl serenity::client::EventHandler for Handler {
                                         new_message.guild_id.unwrap(),
                                         me_id,
                                     )
-                                    .await?,
+                                    .await
+                                    .map_err(|e| {
+                                        anyhow::format_err!("resolve_display_name: {}", e)
+                                    })?,
                                 timestamp: new_message
                                     .timestamp
                                     .with_timezone(&chrono::Utc)
@@ -626,7 +635,8 @@ impl serenity::client::EventHandler for Handler {
                                 m.content(&c);
                                 m
                             })
-                            .await?;
+                            .await
+                            .map_err(|e| anyhow::format_err!("send_message: {}", e))?;
                     }
                 }
 
@@ -638,7 +648,8 @@ impl serenity::client::EventHandler for Handler {
                             m.content(&c);
                             m
                         })
-                        .await?;
+                        .await
+                        .map_err(|e| anyhow::format_err!("send_message: {}", e))?;
                 }
 
                 Ok::<_, anyhow::Error>(())
