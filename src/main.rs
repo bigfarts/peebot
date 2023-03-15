@@ -12,14 +12,27 @@ enum ThreadMode {
     Multi,
 }
 
+impl ThreadMode {
+    fn from_channel_name(name: &str) -> Self {
+        if name.to_lowercase().contains("[multi]") {
+            ThreadMode::Multi
+        } else {
+            ThreadMode::Single
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ChatSettings {
     system_message: String,
     model_settings: ModelSettings,
 }
 
+static STRIP_TRAILING_WHITESPACE_REGEX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| regex::Regex::new(r"\s+$").unwrap());
+
 impl ChatSettings {
     fn new(s: &str) -> Result<Self, anyhow::Error> {
+        let s = STRIP_TRAILING_WHITESPACE_REGEX.replace_all(s, "");
         let parts = s
             .split("\n---\n")
             .into_iter()
@@ -85,16 +98,10 @@ impl Thread {
             unreachable!();
         };
 
-        let mode = if channel.name.to_lowercase().contains("[multi]") {
-            ThreadMode::Multi
-        } else {
-            ThreadMode::Single
-        };
-
         Ok(Self {
             primary_message,
             messages,
-            mode,
+            mode: ThreadMode::from_channel_name(&channel.name),
         })
     }
 }
@@ -293,8 +300,17 @@ impl serenity::client::EventHandler for Handler {
                 log::info!("thread {} archived", thread.id);
                 threads.remove(&thread.id);
             } else {
-                log::info!("thread {} flushed due to update", thread.id);
-                threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(None)));
+                match threads.entry(thread.id) {
+                    std::collections::hash_map::Entry::Occupied(e) => {
+                        let mut t = e.get().lock().await;
+                        if let Some(t) = t.as_mut() {
+                            t.mode = ThreadMode::from_channel_name(&thread.name);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(std::sync::Arc::new(tokio::sync::Mutex::new(None)));
+                    }
+                }
             }
 
             Ok::<_, anyhow::Error>(())
