@@ -659,15 +659,14 @@ impl serenity::client::EventHandler for Handler {
                 new_message
                     .channel_id
                     .send_message(&ctx.http, |m| {
-                        m.embed(|e| {
-                            e.title("Error");
-                            e.color(serenity::utils::colours::css::DANGER);
-                            e.description(format!("{:?}", e));
-                            e
-                        });
-                        m
+                        m.embed(|em| {
+                            em.title("Error")
+                                .color(serenity::utils::colours::css::DANGER)
+                                .description(format!("{:?}", e))
+                        })
                     })
-                    .await?;
+                    .await
+                    .map_err(|e| anyhow::format_err!("send error: {}", e))?;
                 return Err(e);
             }
 
