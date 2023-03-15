@@ -493,7 +493,7 @@ impl serenity::client::EventHandler for Handler {
 
                 let mut messages = vec![];
 
-                for (_, message) in thread.messages.iter() {
+                for (_, message) in thread.messages.iter().rev() {
                     let mut next_messages = messages.clone();
                     if message.content.is_empty() {
                         continue;
@@ -578,7 +578,8 @@ impl serenity::client::EventHandler for Handler {
                     messages.push(oai_message);
                 }
 
-                messages.insert(0, system_message);
+                messages.push(system_message);
+                messages.reverse();
 
                 let input_tokens = openai::count_tokens(&self.tokenizer, &messages) as u32;
 
