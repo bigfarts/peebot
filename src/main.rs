@@ -322,6 +322,9 @@ impl serenity::client::EventHandler for Handler {
     ) {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
+            if new_message.author.id == me_id {
+                return Ok(());
+            }
 
             let thread = {
                 let threads = self.threads.lock().await;
