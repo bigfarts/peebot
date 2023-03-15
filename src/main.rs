@@ -7,31 +7,33 @@ use handlebars::Renderable;
 
 const MAX_MESSAGE_BUFFER: usize = 2048;
 
+#[derive(Debug, PartialEq)]
+enum ThreadMode {
+    Single,
+    Multi,
+}
+
 #[derive(Debug)]
 struct ChatSettings {
     system_message_format: handlebars::Template,
-    user_message_format: handlebars::Template,
-    parameters: ChatParameters,
+    model_settings: ModelSettings,
 }
 
-impl std::str::FromStr for ChatSettings {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+impl ChatSettings {
+    fn new(s: &str) -> Result<Self, anyhow::Error> {
         let parts = s
             .split("\n---\n")
             .into_iter()
             .map(|p| Some(p))
             .chain(std::iter::repeat(None))
-            .take(3)
+            .take(2)
             .collect::<Vec<_>>();
 
         Ok(ChatSettings {
             system_message_format: handlebars::Template::compile(parts[0].unwrap())?,
-            user_message_format: handlebars::Template::compile(parts[1].unwrap_or("{{content}}"))?,
-            parameters: parts[2].map_or_else(
-                || Ok(ChatParameters::default()),
-                |v| toml::from_str::<ChatParameters>(v),
+            model_settings: parts[1].map_or_else(
+                || Ok(ModelSettings::default()),
+                |v| toml::from_str::<ModelSettings>(v),
             )?,
         })
     }
@@ -39,12 +41,11 @@ impl std::str::FromStr for ChatSettings {
 
 #[derive(serde::Deserialize, Default, Debug)]
 #[serde(default)]
-struct ChatParameters {
+struct ModelSettings {
     temperature: Option<f64>,
     top_p: Option<f64>,
     frequency_penalty: Option<f64>,
     presence_penalty: Option<f64>,
-    single_user: bool,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,7 @@ struct Thread {
         serenity::model::id::MessageId,
         serenity::model::channel::Message,
     >,
+    mode: ThreadMode,
 }
 
 impl Thread {
@@ -85,9 +87,24 @@ impl Thread {
             messages.insert(message.id, message);
         }
 
+        let channel = if let serenity::model::prelude::Channel::Guild(guild_channel) =
+            http.as_ref().get_channel(id.0).await?
+        {
+            guild_channel
+        } else {
+            unreachable!();
+        };
+
+        let mode = if channel.name.to_lowercase().contains("[multi]") {
+            ThreadMode::Multi
+        } else {
+            ThreadMode::Single
+        };
+
         Ok(Self {
             primary_message,
             messages,
+            mode,
         })
     }
 }
@@ -349,13 +366,11 @@ impl serenity::client::EventHandler for Handler {
                 log::info!("thread {} archived", thread.id);
                 threads.remove(&thread.id);
             } else {
-                match threads.entry(thread.id) {
-                    std::collections::hash_map::Entry::Occupied(_) => {}
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        log::info!("thread {} scheduled for load", thread.id);
-                        e.insert(std::sync::Arc::new(tokio::sync::Mutex::new(None)));
-                    }
-                }
+                log::info!("thread {} flushed due to update", thread.id);
+                threads.insert(
+                    thread.id,
+                    std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+                );
             }
 
             Ok::<_, anyhow::Error>(())
@@ -459,7 +474,7 @@ impl serenity::client::EventHandler for Handler {
             }
 
             if let Err(e) = (|| async {
-                let settings: ChatSettings = thread.primary_message.content.parse()?;
+                let settings = ChatSettings::new(&thread.primary_message.content)?;
 
                 let system_message = {
                     let mut output = handlebars::StringOutput::new();
@@ -490,10 +505,17 @@ impl serenity::client::EventHandler for Handler {
                         &mut output,
                     )?;
 
+                    let mut content = output.into_string()?;
+                    if thread.mode == ThreadMode::Multi {
+                        content.push_str(
+                            "\n\nDo not prefix your replies with your nickname and timestamp.",
+                        );
+                    }
+
                     openai::Message {
                         role: openai::Role::System,
                         name: None,
-                        content: output.into_string()?,
+                        content,
                     }
                 };
 
@@ -512,15 +534,13 @@ impl serenity::client::EventHandler for Handler {
                             content: message.content.clone(),
                         }
                     } else {
-                        let mut content = message.content.clone();
-                        if settings.parameters.single_user {
-                            if !message.mentions_user_id(me_id) {
-                                continue;
-                            }
+                        if !message.mentions_user_id(me_id) {
+                            continue;
+                        }
 
-                            // Need to do some regex replacement.
-                            content = STRIP_SINGLE_USER_REGEX
-                                .replace(&content, |c: &regex::Captures| {
+                        let content = match thread.mode {
+                            ThreadMode::Single => STRIP_SINGLE_USER_REGEX
+                                .replace(&message.content, |c: &regex::Captures| {
                                     if serenity::model::id::UserId(
                                         c["user_id"].parse::<u64>().unwrap(),
                                     ) == me_id
@@ -530,49 +550,33 @@ impl serenity::client::EventHandler for Handler {
                                         c[0].to_string()
                                     }
                                 })
-                                .to_string();
-                        }
-                        content = self
+                                .to_string(),
+                            ThreadMode::Multi => format!(
+                                "{} at {} said:\n{}",
+                                self.resolve_display_name(
+                                    &ctx.http,
+                                    new_message.guild_id.unwrap(),
+                                    message.author.id,
+                                )
+                                .await
+                                .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
+                                new_message
+                                    .timestamp
+                                    .with_timezone(&chrono::Utc)
+                                    .to_rfc3339(),
+                                message.content
+                            ),
+                        };
+
+                        let content = self
                             .resolve_message(&ctx.http, new_message.guild_id.unwrap(), &content)
                             .await
                             .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?;
 
-                        let mut output = handlebars::StringOutput::new();
-
-                        #[derive(serde::Serialize)]
-                        struct UserMessageFormatArgs {
-                            display_name: String,
-                            timestamp: String,
-                            content: String,
-                        }
-
-                        settings.user_message_format.render(
-                            &self.handlebars,
-                            &handlebars::Context::wraps(UserMessageFormatArgs {
-                                display_name: self
-                                    .resolve_display_name(
-                                        &ctx.http,
-                                        new_message.guild_id.unwrap(),
-                                        me_id,
-                                    )
-                                    .await
-                                    .map_err(|e| {
-                                        anyhow::format_err!("resolve_display_name: {}", e)
-                                    })?,
-                                timestamp: new_message
-                                    .timestamp
-                                    .with_timezone(&chrono::Utc)
-                                    .to_rfc3339(),
-                                content,
-                            })?,
-                            &mut handlebars::RenderContext::new(None),
-                            &mut output,
-                        )?;
-
                         openai::Message {
                             role: openai::Role::User,
                             name: None,
-                            content: output.into_string()?,
+                            content,
                         }
                     };
 
@@ -597,10 +601,10 @@ impl serenity::client::EventHandler for Handler {
                     messages,
                     stream: true,
                     model: "gpt-3.5-turbo".to_owned(),
-                    temperature: settings.parameters.temperature,
-                    top_p: settings.parameters.top_p,
-                    frequency_penalty: settings.parameters.frequency_penalty,
-                    presence_penalty: settings.parameters.presence_penalty,
+                    temperature: settings.model_settings.temperature,
+                    top_p: settings.model_settings.top_p,
+                    frequency_penalty: settings.model_settings.frequency_penalty,
+                    presence_penalty: settings.model_settings.presence_penalty,
                     max_tokens: Some(self.config.max_tokens - input_tokens),
                 };
                 log::info!("{:#?}", req);
