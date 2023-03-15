@@ -408,9 +408,6 @@ impl serenity::client::EventHandler for Handler {
     ) {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
-            if new_message.author.id == me_id {
-                return Ok(());
-            }
 
             let thread = {
                 let threads = self.threads.lock().await;
@@ -422,7 +419,8 @@ impl serenity::client::EventHandler for Handler {
                 thread.clone()
             };
 
-            let should_reply = new_message.mentions_user_id(me_id);
+            let should_reply =
+                new_message.author.id != me_id && new_message.mentions_user_id(me_id);
             let can_reply = thread.try_lock().is_ok();
 
             if should_reply && !can_reply {
