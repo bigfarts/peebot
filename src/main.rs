@@ -28,11 +28,11 @@ struct ChatSettings {
     model_settings: ModelSettings,
 }
 
-static STRIP_TRAILING_WHITESPACE_REGEX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| regex::Regex::new(r"\s+$").unwrap());
+static STRIP_TRAILING_WHITESPACE_REGEX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| regex::Regex::new(r"[ \t]+\n").unwrap());
 
 impl ChatSettings {
     fn new(s: &str) -> Result<Self, anyhow::Error> {
-        let s = STRIP_TRAILING_WHITESPACE_REGEX.replace_all(s, "");
+        let s = STRIP_TRAILING_WHITESPACE_REGEX.replace_all(s, "\n");
         let parts = s
             .split("\n---\n")
             .into_iter()
@@ -407,7 +407,7 @@ impl serenity::client::EventHandler for Handler {
                     name: None,
                     content: if thread.mode == ThreadMode::Multi {
                         format!(
-                            "You are {}.\n\n{}\n\nDo not prefix your replies with your name and timestamp.",
+                            "Your name is {}.\n\n{}\n\nDo not prefix your replies with your name and timestamp.",
                             self.resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), me_id,)
                                 .await
                                 .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
