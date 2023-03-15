@@ -534,23 +534,24 @@ impl serenity::client::EventHandler for Handler {
                             content: message.content.clone(),
                         }
                     } else {
-                        if !message.mentions_user_id(me_id) {
-                            continue;
-                        }
-
                         let content = match thread.mode {
-                            ThreadMode::Single => STRIP_SINGLE_USER_REGEX
-                                .replace(&message.content, |c: &regex::Captures| {
-                                    if serenity::model::id::UserId(
-                                        c["user_id"].parse::<u64>().unwrap(),
-                                    ) == me_id
-                                    {
-                                        "".to_string()
-                                    } else {
-                                        c[0].to_string()
-                                    }
-                                })
-                                .to_string(),
+                            ThreadMode::Single => {
+                                if !message.mentions_user_id(me_id) {
+                                    continue;
+                                }
+                                STRIP_SINGLE_USER_REGEX
+                                    .replace(&message.content, |c: &regex::Captures| {
+                                        if serenity::model::id::UserId(
+                                            c["user_id"].parse::<u64>().unwrap(),
+                                        ) == me_id
+                                        {
+                                            "".to_string()
+                                        } else {
+                                            c[0].to_string()
+                                        }
+                                    })
+                                    .to_string()
+                            }
                             ThreadMode::Multi => format!(
                                 "{} at {} said:\n{}",
                                 self.resolve_display_name(
