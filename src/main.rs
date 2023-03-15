@@ -754,7 +754,7 @@ impl serenity::client::EventHandler for Handler {
         &self,
         _ctx: serenity::client::Context,
         channel_id: serenity::model::id::ChannelId,
-        deleted_message_id: serenity::model::id::MessageId,
+        _deleted_message_id: serenity::model::id::MessageId,
         _guild_id: Option<serenity::model::id::GuildId>,
     ) {
         if let Err(e) = (|| async {
@@ -769,13 +769,8 @@ impl serenity::client::EventHandler for Handler {
             };
 
             let mut thread = thread.lock().await;
-            let thread = if let Some(thread) = thread.as_mut() {
-                thread
-            } else {
-                return Ok(());
-            };
-
-            thread.messages.remove(&deleted_message_id);
+            log::info!("thread {} flushed for message delete", channel_id);
+            *thread = None;
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -789,7 +784,7 @@ impl serenity::client::EventHandler for Handler {
         &self,
         _ctx: serenity::client::Context,
         channel_id: serenity::model::id::ChannelId,
-        multiple_deleted_messages_id: Vec<serenity::model::id::MessageId>,
+        _multiple_deleted_messages_id: Vec<serenity::model::id::MessageId>,
         _guild_id: Option<serenity::model::id::GuildId>,
     ) {
         if let Err(e) = (|| async {
@@ -804,15 +799,8 @@ impl serenity::client::EventHandler for Handler {
             };
 
             let mut thread = thread.lock().await;
-            let thread = if let Some(thread) = thread.as_mut() {
-                thread
-            } else {
-                return Ok(());
-            };
-
-            for message_id in multiple_deleted_messages_id {
-                thread.messages.remove(&message_id);
-            }
+            log::info!("thread {} flushed for message delete", channel_id);
+            *thread = None;
 
             Ok::<_, anyhow::Error>(())
         })()
