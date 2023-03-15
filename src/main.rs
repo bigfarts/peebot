@@ -729,9 +729,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         | serenity::model::gateway::GatewayIntents::GUILDS
         | serenity::model::gateway::GatewayIntents::GUILD_MEMBERS;
 
-    let mut handlebars = handlebars::Handlebars::default();
-    handlebars.register_escape_fn(|s| s.to_owned());
-
     serenity::client::ClientBuilder::new(&config.discord_token, intents)
         .event_handler(Handler {
             nicknames: tokio::sync::Mutex::new(std::collections::HashMap::new()),
