@@ -58,6 +58,7 @@ struct Thread {
 impl Thread {
     async fn new(
         http: impl AsRef<serenity::http::Http>,
+        me_id: serenity::model::id::UserId,
         id: serenity::model::id::ChannelId,
     ) -> Result<Self, serenity::Error> {
         let primary_message = id.message(&http, id.0).await?;
@@ -69,6 +70,17 @@ impl Thread {
             if message.id.0 == id.0 {
                 continue;
             }
+
+            if message.author.id == me_id {
+                if let Some(interaction) = message.interaction.as_ref() {
+                    if interaction.kind
+                    == serenity::model::application::interaction::InteractionType::ApplicationCommand
+                    && interaction.name == FORGET_COMMAND_NAME {
+                        continue;
+                    }
+                }
+            }
+
             messages.insert(message.id, message);
         }
 
@@ -161,14 +173,86 @@ impl Handler {
     }
 }
 
+const FORGET_COMMAND_NAME: &str = "forget";
+
 #[async_trait::async_trait]
 impl serenity::client::EventHandler for Handler {
     async fn ready(
         &self,
-        _ctx: serenity::client::Context,
+        ctx: serenity::client::Context,
         data_about_bot: serenity::model::gateway::Ready,
     ) {
-        *self.me_id.lock() = data_about_bot.user.id;
+        if let Err(e) = (|| async {
+            *self.me_id.lock() = data_about_bot.user.id;
+            serenity::model::application::command::Command::create_global_application_command(
+                &ctx.http,
+                |command| {
+                    command
+                        .name(FORGET_COMMAND_NAME)
+                        .description("Add a break in the chat log to forget everything before it.")
+                },
+            )
+            .await?;
+
+            Ok::<_, anyhow::Error>(())
+        })()
+        .await
+        {
+            log::error!("error in ready: {:?}", e);
+        }
+    }
+
+    async fn interaction_create(
+        &self,
+        ctx: serenity::client::Context,
+        interaction: serenity::model::application::interaction::Interaction,
+    ) {
+        if let Err(e) = (|| async {
+            let app_command = if let Some(app_command) = interaction.application_command() {
+                app_command
+            } else {
+                return Ok(());
+            };
+
+            let thread = {
+                let threads = self.threads.lock().await;
+                let thread = if let Some(thread) = threads.get(&app_command.channel_id) {
+                    thread
+                } else {
+                    return Ok(());
+                };
+                thread.clone()
+            };
+
+            let mut thread = thread.lock().await;
+
+            if app_command.kind
+                == serenity::model::application::interaction::InteractionType::ApplicationCommand
+                && app_command.data.name == FORGET_COMMAND_NAME
+            {
+                log::info!("thread {} flushed for forget", app_command.channel_id);
+                app_command
+                    .create_interaction_response(&ctx.http, |r| {
+                        r.interaction_response_data(|d| {
+                            d.embed(|e| {
+                                e.color(serenity::utils::colours::css::POSITIVE);
+                                e.description("Okay, forgetting everything from here. If you want me to remember, just delete this message.");
+                                e
+                            });
+                            d
+                        });
+                        r
+                    })
+                    .await?;
+                *thread = None;
+            }
+
+            Ok::<_, anyhow::Error>(())
+        })()
+        .await
+        {
+            log::error!("error in interaction_create: {:?}", e);
+        }
     }
 
     async fn guild_create(
@@ -208,6 +292,8 @@ impl serenity::client::EventHandler for Handler {
         thread: serenity::model::channel::GuildChannel,
     ) {
         if let Err(e) = (|| async {
+            let me_id = self.me_id.lock().clone();
+
             if thread.parent_id
                 != Some(serenity::model::id::ChannelId(
                     self.config.parent_channel_id,
@@ -222,7 +308,7 @@ impl serenity::client::EventHandler for Handler {
 
             thread.id.join_thread(&ctx.http).await?;
 
-            let thread_info = Thread::new(&ctx.http, thread.id).await?;
+            let thread_info = Thread::new(&ctx.http, me_id, thread.id).await?;
             log::info!(
                 "thread {} joined: {:?}",
                 thread.id,
@@ -359,7 +445,7 @@ impl serenity::client::EventHandler for Handler {
                 thread
             } else {
                 log::info!("thread {} loaded", new_message.channel_id);
-                *thread = Some(Thread::new(&ctx.http, new_message.channel_id).await?);
+                *thread = Some(Thread::new(&ctx.http, me_id, new_message.channel_id).await?);
                 thread.as_mut().unwrap()
             };
 
