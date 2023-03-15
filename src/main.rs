@@ -38,6 +38,7 @@ impl std::str::FromStr for ChatSettings {
 }
 
 #[derive(serde::Deserialize, Default, Debug)]
+#[serde(default)]
 struct ChatParameters {
     temperature: Option<f64>,
     top_p: Option<f64>,
@@ -666,7 +667,7 @@ impl serenity::client::EventHandler for Handler {
                         })
                     })
                     .await
-                    .map_err(|e| anyhow::format_err!("send error: {}", e))?;
+                    .map_err(|send_e| anyhow::format_err!("send error: {} ({})", send_e, e))?;
                 return Err(e);
             }
 
