@@ -80,7 +80,7 @@ impl Thread {
                 break;
             }
 
-            if message.kind != serenity::model::channel::MessageType::Regular {
+            if message.kind != serenity::model::channel::MessageType::Regular && message.kind != serenity::model::channel::MessageType::InlineReply {
                 continue;
             }
 
@@ -374,7 +374,9 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
 
-            if new_message.kind != serenity::model::channel::MessageType::Regular {
+            if new_message.kind != serenity::model::channel::MessageType::Regular
+                && new_message.kind != serenity::model::channel::MessageType::InlineReply
+            {
                 return Ok(());
             }
 
