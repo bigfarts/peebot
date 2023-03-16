@@ -5,24 +5,30 @@ pub fn split_once(s: &str, limit: usize) -> (&str, &str) {
         return (s, "");
     }
 
-    // Try to break on a line break location first.
-    for (i, _) in unicode_linebreak::linebreaks(&s)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
+    let breakpoints = unicode_linebreak::linebreaks(&s).collect::<Vec<_>>();
+
+    // Try to break on a mandatory line break location first.
+    for &(i, opportunity) in breakpoints.iter().rev() {
+        if opportunity != unicode_linebreak::BreakOpportunity::Mandatory {
+            continue;
+        }
+        if i <= limit {
+            return s.split_at(i);
+        }
+    }
+
+    // Then, try to break on an allowed line break location.
+    for &(i, opportunity) in breakpoints.iter().rev() {
+        if opportunity != unicode_linebreak::BreakOpportunity::Allowed {
+            continue;
+        }
         if i <= limit {
             return s.split_at(i);
         }
     }
 
     // Failing that, break on a grapheme index instead.
-    for (i, _) in s
-        .grapheme_indices(true)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
+    for (i, _) in s.grapheme_indices(true).rev() {
         if i <= limit {
             return s.split_at(i);
         }
@@ -39,10 +45,7 @@ pub struct Chunker {
 
 impl Chunker {
     pub fn new(limit: usize) -> Self {
-        Self {
-            buf: String::new(),
-            limit,
-        }
+        Self { buf: String::new(), limit }
     }
 
     pub fn push(&mut self, s: &str) -> Vec<String> {
@@ -90,10 +93,12 @@ mod tests {
     }
 
     #[test]
+    fn test_split_once_break_linebreak_mandatory() {
+        assert_eq!(split_once("aa\naa abb", 7), ("aa\n", "aa abb"));
+    }
+
+    #[test]
     fn test_split_once_break_no_family_separation() {
-        assert_eq!(
-            split_once("hello 👨‍👩‍👦 world", 8),
-            ("hello ", "👨‍👩‍👦 world")
-        );
+        assert_eq!(split_once("hello 👨‍👩‍👦 world", 8), ("hello ", "👨‍👩‍👦 world"));
     }
 }
