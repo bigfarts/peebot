@@ -494,7 +494,6 @@ impl serenity::client::EventHandler for Handler {
 
                 let req = openai::ChatRequest {
                     messages,
-                    stream: true,
                     model: "gpt-3.5-turbo".to_owned(),
                     temperature: settings.model_settings.temperature,
                     top_p: settings.model_settings.top_p,

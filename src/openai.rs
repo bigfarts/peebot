@@ -50,7 +50,6 @@ pub struct Chunk {
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug)]
 pub struct ChatRequest {
-    pub stream: bool,
     pub model: String,
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,13 +94,17 @@ impl ChatClient {
     }
 
     pub async fn request(&self, req: &ChatRequest) -> Result<impl futures_core::stream::Stream<Item = Result<Chunk, Error>>, reqwest::Error> {
-        let mut req = req.clone();
-        req.stream = true;
+        #[derive(serde::Serialize)]
+        struct WrappedRequest<'a> {
+            stream: bool,
+            #[serde(flatten)]
+            req: &'a ChatRequest,
+        }
 
         let mut resp = self
             .client
             .post("https://api.openai.com/v1/chat/completions")
-            .json(&req)
+            .json(&WrappedRequest { stream: true, req })
             .send()
             .await?
             .error_for_status()?;
