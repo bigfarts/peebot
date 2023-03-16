@@ -80,6 +80,10 @@ impl Thread {
                 break;
             }
 
+            if message.kind != serenity::model::channel::MessageType::Regular {
+                continue;
+            }
+
             if message.author.id == me_id {
                 if let Some(interaction) = message.interaction.as_ref() {
                     if interaction.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
@@ -369,6 +373,10 @@ impl serenity::client::EventHandler for Handler {
     async fn message(&self, ctx: serenity::client::Context, new_message: serenity::model::channel::Message) {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
+
+            if new_message.kind != serenity::model::channel::MessageType::Regular {
+                return Ok(());
+            }
 
             let thread = {
                 let threads = self.threads.lock().await;
