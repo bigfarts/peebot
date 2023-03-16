@@ -403,7 +403,7 @@ impl serenity::client::EventHandler for Handler {
                         m.embed(|e| {
                             e.color(serenity::utils::colours::css::WARNING)
                                 .description("I'm already replying, please wait for me to finish!")
-                                .field("Original message", &content, false)
+                                .field("Original message", content, false)
                         })
                         .reference_message(&new_message)
                     })
