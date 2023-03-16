@@ -416,7 +416,7 @@ impl serenity::client::EventHandler for Handler {
                                     )
                                     .text(format!("{}#{:04}", new_message.author.name, new_message.author.discriminator))
                                 })
-                                .timestamp(chrono::Utc::now())
+                                .timestamp(new_message.timestamp)
                         })
                     })
                     .await?;
