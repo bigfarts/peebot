@@ -271,6 +271,10 @@ impl serenity::client::EventHandler for Handler {
                     thread.id.join_thread(&ctx.http).await?;
                 }
 
+                if thread.thread_metadata.unwrap().locked {
+                    thread.edit_thread(&ctx.http, |t| t.locked(false)).await?;
+                }
+
                 log::info!("thread {} scheduled for load", thread.id);
                 threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(None)));
             }
