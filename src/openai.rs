@@ -120,7 +120,7 @@ impl ChatClient {
                     let payload = &payload[..payload.len() - 2];
 
                     if !payload.starts_with(b"data: ") {
-                        return Err(Error::MalformedStreamItem(payload.to_vec()))?;
+                        Err(Error::MalformedStreamItem(payload.to_vec()))?;
                     }
 
                     let payload = &payload[6..];
@@ -130,7 +130,7 @@ impl ChatClient {
 
                     // Check if there is an error first.
                     if let Ok(stream_error) = serde_json::from_slice::<StreamError>(payload) {
-                        return Err(Error::Stream(stream_error.error))?;
+                        Err(Error::Stream(stream_error.error))?;
                     }
 
                     yield serde_json::from_slice::<Chunk>(payload)?;
