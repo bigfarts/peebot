@@ -1,8 +1,8 @@
 use unicode_segmentation::UnicodeSegmentation;
 
-pub fn split_once(s: &str, limit: usize) -> (&str, &str) {
+pub fn split_once<'a>(s: &'a str, limit: usize) -> (std::borrow::Cow<'a, str>, std::borrow::Cow<'a, str>) {
     if s.len() <= limit {
-        return (s, "");
+        return (std::borrow::Cow::Borrowed(s), std::borrow::Cow::Borrowed(""));
     }
 
     let breakpoints = unicode_linebreak::linebreaks(&s).collect::<Vec<_>>();
@@ -12,30 +12,50 @@ pub fn split_once(s: &str, limit: usize) -> (&str, &str) {
         if opportunity != unicode_linebreak::BreakOpportunity::Mandatory {
             continue;
         }
-        if i <= limit {
-            return s.split_at(i);
+        if i <= limit && i > 0 {
+            let (head, tail) = s.split_at(i);
+            return (std::borrow::Cow::Borrowed(head), std::borrow::Cow::Borrowed(tail));
         }
     }
 
-    // Then, try to break on an allowed line break location.
+    // Break on sentences if we can't break cleanly.
+    for (i, _) in s.split_sentence_bound_indices().collect::<Vec<_>>().into_iter().rev() {
+        if i <= limit && i > 0 {
+            let (head, tail) = s.split_at(i);
+            return (std::borrow::Cow::Borrowed(head), std::borrow::Cow::Borrowed(tail));
+        }
+    }
+
+    // Then, try to break on an allowed line break location. This might be a space in the middle of a sentence.
     for &(i, opportunity) in breakpoints.iter().rev() {
         if opportunity != unicode_linebreak::BreakOpportunity::Allowed {
             continue;
         }
-        if i <= limit {
-            return s.split_at(i);
+        if i <= limit && i > 0 {
+            let (head, tail) = s.split_at(i);
+            return (std::borrow::Cow::Borrowed(head), std::borrow::Cow::Borrowed(tail));
         }
     }
 
-    // Failing that, break on a grapheme index instead.
+    // Failing that, break between graphemes instead.
     for (i, _) in s.grapheme_indices(true).rev() {
-        if i <= limit {
-            return s.split_at(i);
+        if i <= limit && i > 0 {
+            let (head, tail) = s.split_at(i);
+            return (std::borrow::Cow::Borrowed(head), std::borrow::Cow::Borrowed(tail));
+        }
+    }
+
+    // Break on Unicode codepoint if we can't break on a grapheme index. This can split 👨‍👩‍👦 into 👨 and 👨‍👩.
+    for (i, _) in s.char_indices().rev() {
+        if i <= limit && i > 0 {
+            let (head, tail) = s.split_at(i);
+            return (std::borrow::Cow::Borrowed(head), std::borrow::Cow::Borrowed(tail));
         }
     }
 
     // Just kind of screwed, split at a byte position.
-    s.split_at(limit)
+    let (head, tail) = s.as_bytes().split_at(limit);
+    (String::from_utf8_lossy(head), String::from_utf8_lossy(tail))
 }
 
 pub struct Chunker {
@@ -74,31 +94,64 @@ mod tests {
 
     #[test]
     fn test_split_empty() {
-        assert_eq!(split_once("", 7), ("", ""));
+        let (head, tail) = split_once("", 7);
+        assert_eq!(head, "");
+        assert_eq!(tail, "");
     }
 
     #[test]
     fn test_split_once_easy() {
-        assert_eq!(split_once("hello world", 7), ("hello ", "world"));
+        let (head, tail) = split_once("hello world", 7);
+        assert_eq!(head, "hello ");
+        assert_eq!(tail, "world");
     }
 
     #[test]
     fn test_split_once_precise() {
-        assert_eq!(split_once("a a a b b b c c", 4), ("a a ", "a b b b c c"));
+        let (head, tail) = split_once("a a a b b b c c", 4);
+        assert_eq!(head, "a a ");
+        assert_eq!(tail, "a b b b c c");
     }
 
     #[test]
     fn test_split_once_break_word() {
-        assert_eq!(split_once("aaaaabb", 2), ("aa", "aaabb"));
+        let (head, tail) = split_once("aaaaabb", 2);
+        assert_eq!(head, "aa");
+        assert_eq!(tail, "aaabb");
     }
 
     #[test]
     fn test_split_once_break_linebreak_mandatory() {
-        assert_eq!(split_once("aa\naa abb", 7), ("aa\n", "aa abb"));
+        let (head, tail) = split_once("aa\naa abb", 4);
+        assert_eq!(head, "aa\n");
+        assert_eq!(tail, "aa abb");
+    }
+
+    #[test]
+    fn test_split_once_break_sentence() {
+        let (head, tail) = split_once("A a. A a [...] abb.", 7);
+        assert_eq!(head, "A a. ");
+        assert_eq!(tail, "A a [...] abb.");
     }
 
     #[test]
     fn test_split_once_break_no_family_separation() {
-        assert_eq!(split_once("hello 👨‍👩‍👦 world", 8), ("hello ", "👨‍👩‍👦 world"));
+        let (head, tail) = split_once("hello 👨‍👩‍👦 world", 8);
+        assert_eq!(head, "hello ");
+        assert_eq!(tail, "👨‍👩‍👦 world");
+    }
+
+    #[test]
+    fn test_split_once_break_family_separation() {
+        let (head, tail) = split_once("👨‍👩‍👦", 4);
+        assert_eq!(head, "👨");
+        assert_eq!(tail, "\u{200d}👩\u{200d}👦");
+    }
+
+    #[test]
+    fn test_split_once_break_desperate() {
+        let (head, tail) = split_once("👨‍👩‍👦", 2);
+        assert_eq!(head, "�");
+        assert_eq!(tail, "��\u{200d}👩\u{200d}👦");
     }
 }
