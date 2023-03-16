@@ -80,10 +80,6 @@ impl Thread {
                 break;
             }
 
-            if message.kind != serenity::model::channel::MessageType::Regular && message.kind != serenity::model::channel::MessageType::InlineReply {
-                continue;
-            }
-
             if message.author.id == me_id {
                 if let Some(interaction) = message.interaction.as_ref() {
                     if interaction.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
@@ -93,6 +89,11 @@ impl Thread {
                     }
                 }
             }
+
+            if message.kind != serenity::model::channel::MessageType::Regular && message.kind != serenity::model::channel::MessageType::InlineReply {
+                continue;
+            }
+
             messages.insert(message.id, message);
         }
 
