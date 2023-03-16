@@ -395,12 +395,14 @@ impl serenity::client::EventHandler for Handler {
             let can_reply = thread.try_lock().is_ok();
 
             if should_reply && !can_reply {
+                ctx.http.delete_message(new_message.channel_id.0, new_message.id.0).await?;
                 new_message
                     .channel_id
                     .send_message(&ctx.http, |m| {
                         m.embed(|e| {
                             e.color(serenity::utils::colours::css::WARNING)
                                 .description("I'm already replying, please wait for me to finish!")
+                                .field("Original message", &new_message.content, false)
                         })
                         .reference_message(&new_message)
                     })
@@ -430,7 +432,9 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             }
 
-            if let Err(e) = (|| async {
+            new_message.channel_id.edit_thread(&ctx.http, |t| t.locked(true)).await?;
+
+            let r = (|| async {
                 let settings = ChatSettings::new(&thread.primary_message.content)?;
 
                 let (input_tokens, messages) = {
@@ -581,8 +585,9 @@ impl serenity::client::EventHandler for Handler {
 
                 Ok::<_, anyhow::Error>(())
             })()
-            .await
-            {
+            .await;
+
+            if let Err(e) = &r {
                 new_message
                     .channel_id
                     .send_message(&ctx.http, |m| {
@@ -595,10 +600,10 @@ impl serenity::client::EventHandler for Handler {
                     })
                     .await
                     .map_err(|send_e| anyhow::format_err!("send error: {} ({})", send_e, e))?;
-                return Err(e);
             }
 
-            Ok::<_, anyhow::Error>(())
+            new_message.channel_id.edit_thread(&ctx.http, |t| t.locked(false)).await?;
+            r
         })()
         .await
         {
