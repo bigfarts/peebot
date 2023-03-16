@@ -395,6 +395,7 @@ impl serenity::client::EventHandler for Handler {
             let can_reply = thread.try_lock().is_ok();
 
             if should_reply && !can_reply {
+                let content = new_message.content.clone();
                 ctx.http.delete_message(new_message.channel_id.0, new_message.id.0).await?;
                 new_message
                     .channel_id
@@ -402,7 +403,7 @@ impl serenity::client::EventHandler for Handler {
                         m.embed(|e| {
                             e.color(serenity::utils::colours::css::WARNING)
                                 .description("I'm already replying, please wait for me to finish!")
-                                .field("Original message", &new_message.content, false)
+                                .field("Original message", &content, false)
                         })
                         .reference_message(&new_message)
                     })
