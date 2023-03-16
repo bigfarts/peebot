@@ -106,30 +106,28 @@ impl Thread {
     }
 }
 
-struct Handler {
-    nicknames: tokio::sync::Mutex<std::collections::HashMap<(serenity::model::id::GuildId, serenity::model::id::UserId), String>>,
-    me_id: parking_lot::Mutex<serenity::model::id::UserId>,
-    tokenizer: tiktoken_rs::CoreBPE,
-    config: Config,
-    chat_client: openai::ChatClient,
-    threads: tokio::sync::Mutex<std::collections::HashMap<serenity::model::id::ChannelId, std::sync::Arc<tokio::sync::Mutex<Option<Thread>>>>>,
+struct Resolver {
+    display_names: std::collections::HashMap<(serenity::model::id::GuildId, serenity::model::id::UserId), String>,
 }
 
-static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
-    once_cell::sync::Lazy::new(|| regex::Regex::new(r"<@!?(?P<user_id>\d+)>|<a?:(?P<emoji_name>\w+):\d+>|<#(?P<channel_id>\d+)>").unwrap());
+impl Resolver {
+    fn new() -> Self {
+        Self {
+            display_names: std::collections::HashMap::new(),
+        }
+    }
 
-static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
-    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\s*<@!?(?P<user_id>\d+)>\s*").unwrap());
+    fn add_display_name(&mut self, guild_id: serenity::model::id::GuildId, user_id: serenity::model::id::UserId, name: String) {
+        self.display_names.insert((guild_id, user_id), name);
+    }
 
-impl Handler {
     async fn resolve_display_name(
-        &self,
+        &mut self,
         http: impl AsRef<serenity::http::Http>,
         guild_id: serenity::model::id::GuildId,
         user_id: serenity::model::id::UserId,
     ) -> Result<String, serenity::Error> {
-        let mut nicknames = self.nicknames.lock().await;
-        match nicknames.entry((guild_id, user_id)) {
+        match self.display_names.entry((guild_id, user_id)) {
             std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let member = http.as_ref().get_member(guild_id.0, user_id.0).await?;
@@ -139,7 +137,7 @@ impl Handler {
     }
 
     async fn resolve_message(
-        &self,
+        &mut self,
         http: impl AsRef<serenity::http::Http>,
         guild_id: serenity::model::id::GuildId,
         content: &str,
@@ -170,6 +168,21 @@ impl Handler {
         Ok(s)
     }
 }
+
+struct Handler {
+    resolver: tokio::sync::Mutex<Resolver>,
+    me_id: parking_lot::Mutex<serenity::model::id::UserId>,
+    tokenizer: tiktoken_rs::CoreBPE,
+    config: Config,
+    chat_client: openai::ChatClient,
+    threads: tokio::sync::Mutex<std::collections::HashMap<serenity::model::id::ChannelId, std::sync::Arc<tokio::sync::Mutex<Option<Thread>>>>>,
+}
+
+static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"<@!?(?P<user_id>\d+)>|<a?:(?P<emoji_name>\w+):\d+>|<#(?P<channel_id>\d+)>").unwrap());
+
+static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\s*<@!?(?P<user_id>\d+)>\s*").unwrap());
 
 const FORGET_COMMAND_NAME: &str = "forget";
 
@@ -343,8 +356,8 @@ impl serenity::client::EventHandler for Handler {
 
     async fn guild_member_update(&self, _ctx: serenity::client::Context, event: serenity::model::event::GuildMemberUpdateEvent) {
         if let Err(e) = (|| async {
-            let mut nicknames = self.nicknames.lock().await;
-            nicknames.insert((event.guild_id, event.user.id), event.nick.unwrap_or(event.user.name));
+            let mut resolver = self.resolver.lock().await;
+            resolver.add_display_name(event.guild_id, event.user.id, event.nick.unwrap_or(event.user.name));
             Ok::<_, anyhow::Error>(())
         })()
         .await
@@ -409,88 +422,98 @@ impl serenity::client::EventHandler for Handler {
             if let Err(e) = (|| async {
                 let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-                let system_message = openai::Message {
-                    role: openai::Role::System,
-                    name: None,
-                    content: if thread.mode == ThreadMode::Multi {
-                        format!(
-                            "Your name is {}.\n\n{}\n\nDo not prefix your replies with your name and timestamp.",
-                            self.resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), me_id,)
-                                .await
-                                .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
-                            settings.system_message
-                        )
-                    } else {
-                        settings.system_message.clone()
-                    },
-                };
+                let (input_tokens, messages) = {
+                    let mut resolver = self.resolver.lock().await;
 
-                let mut messages = vec![];
-
-                // every reply is primed with <im_start>assistant
-                let mut input_tokens = 2 + openai::count_message_tokens(&self.tokenizer, &system_message);
-
-                for (_, message) in thread.messages.iter().rev() {
-                    if message.content.is_empty() {
-                        continue;
-                    }
-
-                    let oai_message = if message.author.id == me_id {
-                        openai::Message {
-                            role: openai::Role::Assistant,
-                            name: None,
-                            content: message.content.clone(),
-                        }
-                    } else {
-                        openai::Message {
-                            role: openai::Role::User,
-                            name: None,
-                            content: match thread.mode {
-                                ThreadMode::Single => {
-                                    if !message.mentions_user_id(me_id) {
-                                        continue;
-                                    }
-
-                                    self.resolve_message(
-                                        &ctx.http,
-                                        new_message.guild_id.unwrap(),
-                                        &STRIP_SINGLE_USER_REGEX.replace(&message.content, |c: &regex::Captures| {
-                                            if serenity::model::id::UserId(c["user_id"].parse::<u64>().unwrap()) == me_id {
-                                                "".to_string()
-                                            } else {
-                                                c[0].to_string()
-                                            }
-                                        }),
-                                    )
+                    let system_message = openai::Message {
+                        role: openai::Role::System,
+                        name: None,
+                        content: if thread.mode == ThreadMode::Multi {
+                            format!(
+                                "Your name is {}.\n\n{}\n\nDo not prefix your replies with your name and timestamp.",
+                                resolver
+                                    .resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), me_id,)
                                     .await
-                                    .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?
-                                }
-                                ThreadMode::Multi => format!(
-                                    "{} at {} said:\n{}",
-                                    self.resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), message.author.id,)
-                                        .await
-                                        .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
-                                    new_message.timestamp.with_timezone(&chrono::Utc).to_rfc3339(),
-                                    self.resolve_message(&ctx.http, new_message.guild_id.unwrap(), &message.content)
-                                        .await
-                                        .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?
-                                ),
-                            },
-                        }
+                                    .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
+                                settings.system_message
+                            )
+                        } else {
+                            settings.system_message.clone()
+                        },
                     };
 
-                    let message_tokens = openai::count_message_tokens(&self.tokenizer, &oai_message);
+                    // every reply is primed with <im_start>assistant
+                    let mut input_tokens = 2 + openai::count_message_tokens(&self.tokenizer, &system_message);
 
-                    if input_tokens + message_tokens > self.config.max_input_tokens as usize {
-                        break;
+                    let mut messages = vec![];
+
+                    for (_, message) in thread.messages.iter().rev() {
+                        if message.content.is_empty() {
+                            continue;
+                        }
+
+                        let oai_message = if message.author.id == me_id {
+                            openai::Message {
+                                role: openai::Role::Assistant,
+                                name: None,
+                                content: message.content.clone(),
+                            }
+                        } else {
+                            openai::Message {
+                                role: openai::Role::User,
+                                name: None,
+                                content: match thread.mode {
+                                    ThreadMode::Single => {
+                                        if !message.mentions_user_id(me_id) {
+                                            continue;
+                                        }
+
+                                        resolver
+                                            .resolve_message(
+                                                &ctx.http,
+                                                new_message.guild_id.unwrap(),
+                                                &STRIP_SINGLE_USER_REGEX.replace(&message.content, |c: &regex::Captures| {
+                                                    if serenity::model::id::UserId(c["user_id"].parse::<u64>().unwrap()) == me_id {
+                                                        "".to_string()
+                                                    } else {
+                                                        c[0].to_string()
+                                                    }
+                                                }),
+                                            )
+                                            .await
+                                            .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?
+                                    }
+                                    ThreadMode::Multi => format!(
+                                        "{} at {} said:\n{}",
+                                        resolver
+                                            .resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), message.author.id,)
+                                            .await
+                                            .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
+                                        new_message.timestamp.with_timezone(&chrono::Utc).to_rfc3339(),
+                                        resolver
+                                            .resolve_message(&ctx.http, new_message.guild_id.unwrap(), &message.content)
+                                            .await
+                                            .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?
+                                    ),
+                                },
+                            }
+                        };
+
+                        let message_tokens = openai::count_message_tokens(&self.tokenizer, &oai_message);
+
+                        if input_tokens + message_tokens > self.config.max_input_tokens as usize {
+                            break;
+                        }
+
+                        messages.push(oai_message);
+                        input_tokens += message_tokens;
                     }
 
-                    messages.push(oai_message);
-                    input_tokens += message_tokens;
-                }
+                    messages.push(system_message);
+                    messages.reverse();
 
-                messages.push(system_message);
-                messages.reverse();
+                    (input_tokens, messages)
+                };
 
                 let req = openai::ChatRequest {
                     messages,
@@ -755,7 +778,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     serenity::client::ClientBuilder::new(&config.discord_token, intents)
         .event_handler(Handler {
-            nicknames: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            resolver: tokio::sync::Mutex::new(Resolver::new()),
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
             tokenizer: tiktoken_rs::cl100k_base().unwrap(),
             config,
