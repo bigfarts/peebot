@@ -4,7 +4,7 @@ mod unichunk;
 use clap::Parser;
 use futures_util::StreamExt;
 
-const MAX_MESSAGE_BUFFER: usize = 2048;
+const MAX_MESSAGE_BUFFER: usize = 2000;
 
 #[derive(Debug, PartialEq)]
 enum ThreadMode {
@@ -58,13 +58,13 @@ struct ModelSettings {
 }
 
 #[derive(Debug)]
-struct Thread {
+struct ThreadInfo {
     primary_message: serenity::model::channel::Message,
     messages: std::collections::BTreeMap<serenity::model::id::MessageId, serenity::model::channel::Message>,
     mode: ThreadMode,
 }
 
-impl Thread {
+impl ThreadInfo {
     async fn new(
         http: impl AsRef<serenity::http::Http>,
         me_id: serenity::model::id::UserId,
@@ -112,18 +112,18 @@ impl Thread {
 }
 
 struct Resolver {
-    display_names: std::collections::HashMap<(serenity::model::id::GuildId, serenity::model::id::UserId), String>,
+    display_names: lru::LruCache<(serenity::model::id::GuildId, serenity::model::id::UserId), String>,
 }
 
 impl Resolver {
-    fn new() -> Self {
+    fn new(cache_size: usize) -> Self {
         Self {
-            display_names: std::collections::HashMap::new(),
+            display_names: lru::LruCache::new(std::num::NonZeroUsize::new(cache_size).unwrap()),
         }
     }
 
     fn add_display_name(&mut self, guild_id: serenity::model::id::GuildId, user_id: serenity::model::id::UserId, name: String) {
-        self.display_names.insert((guild_id, user_id), name);
+        self.display_names.put((guild_id, user_id), name);
     }
 
     async fn resolve_display_name(
@@ -131,14 +131,12 @@ impl Resolver {
         http: impl AsRef<serenity::http::Http>,
         guild_id: serenity::model::id::GuildId,
         user_id: serenity::model::id::UserId,
-    ) -> Result<String, serenity::Error> {
-        match self.display_names.entry((guild_id, user_id)) {
-            std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                let member = http.as_ref().get_member(guild_id.0, user_id.0).await?;
-                Ok(e.insert(member.display_name().into_owned()).clone())
-            }
+    ) -> Result<&str, serenity::Error> {
+        if self.display_names.get(&(guild_id, user_id)).is_none() {
+            let member = http.as_ref().get_member(guild_id.0, user_id.0).await?;
+            self.display_names.put((guild_id, user_id), member.display_name().into_owned());
         }
+        Ok(self.display_names.get(&(guild_id, user_id)).unwrap())
     }
 
     async fn resolve_message(
@@ -157,7 +155,7 @@ impl Resolver {
 
             let repl = if let Some(subm) = capture.name("user_id") {
                 let user_id = subm.as_str().parse::<u64>().unwrap();
-                self.resolve_display_name(&http, guild_id, user_id.into()).await?
+                self.resolve_display_name(&http, guild_id, user_id.into()).await?.to_string()
             } else if let Some(subm) = capture.name("emoji_name") {
                 format!(":{}:", subm.as_str())
             } else if let Some(subm) = capture.name("channel_id") {
@@ -180,7 +178,52 @@ struct Handler {
     tokenizer: tiktoken_rs::CoreBPE,
     config: Config,
     chat_client: openai::ChatClient,
-    threads: tokio::sync::Mutex<std::collections::HashMap<serenity::model::id::ChannelId, std::sync::Arc<tokio::sync::Mutex<Option<Thread>>>>>,
+    thread_cache: tokio::sync::Mutex<ThreadCache>,
+}
+
+struct ThreadCache {
+    thread_ids: std::collections::HashSet<serenity::model::id::ChannelId>,
+    infos: lru::LruCache<serenity::model::id::ChannelId, std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>>,
+}
+
+impl ThreadCache {
+    fn new(cache_size: usize) -> Self {
+        Self {
+            thread_ids: std::collections::HashSet::new(),
+            infos: lru::LruCache::new(std::num::NonZeroUsize::new(cache_size).unwrap()),
+        }
+    }
+
+    fn add(&mut self, thread_id: serenity::model::id::ChannelId) {
+        self.thread_ids.insert(thread_id);
+    }
+
+    fn remove(&mut self, thread_id: serenity::model::id::ChannelId) {
+        self.thread_ids.remove(&thread_id);
+    }
+
+    fn get(&mut self, thread_id: serenity::model::id::ChannelId) -> Option<std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>> {
+        self.infos.get(&thread_id).cloned()
+    }
+
+    async fn load(
+        &mut self,
+        http: impl AsRef<serenity::http::Http>,
+        me_id: serenity::model::id::UserId,
+        thread_id: serenity::model::id::ChannelId,
+    ) -> Result<Option<std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>>, serenity::Error> {
+        if !self.thread_ids.contains(&thread_id) {
+            return Ok(None);
+        }
+
+        let thread_info = std::sync::Arc::new(tokio::sync::Mutex::new(ThreadInfo::new(http, me_id, thread_id).await?));
+        self.infos.put(thread_id, thread_info.clone());
+        Ok(Some(thread_info))
+    }
+
+    fn unload(&mut self, thread_id: serenity::model::id::ChannelId) {
+        self.infos.pop(&thread_id);
+    }
 }
 
 static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
@@ -189,7 +232,7 @@ static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
 static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\s*<@!?(?P<user_id>\d+)>\s*").unwrap());
 
-const FORGET_COMMAND_NAME: &str = "forget";
+const FORGET_COMMAND_NAME: &str = "unload";
 
 #[async_trait::async_trait]
 impl serenity::client::EventHandler for Handler {
@@ -199,7 +242,7 @@ impl serenity::client::EventHandler for Handler {
             serenity::model::application::command::Command::create_global_application_command(&ctx.http, |command| {
                 command
                     .name(FORGET_COMMAND_NAME)
-                    .description("Add a break in the chat log to forget everything before it.")
+                    .description("Add a break in the chat log to unload everything before it.")
             })
             .await?;
 
@@ -219,28 +262,16 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             };
 
-            let thread = {
-                let threads = self.threads.lock().await;
-                let thread = if let Some(thread) = threads.get(&app_command.channel_id) {
-                    thread
-                } else {
-                    return Ok(());
-                };
-                thread.clone()
-            };
-
-            let mut thread = thread.lock().await;
-
             if app_command.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
                 && app_command.data.name == FORGET_COMMAND_NAME
             {
-                log::info!("thread {} flushed for forget", app_command.channel_id);
+                log::info!("thread {} flushed for unload", app_command.channel_id);
                 app_command
                     .create_interaction_response(&ctx.http, |r| {
                         r.interaction_response_data(|d| {
                             d.embed(|e| {
                                 e.color(serenity::utils::colours::css::POSITIVE);
-                                e.description("Okay, forgetting everything from here. If you want me to remember, just delete this message.");
+                                e.description("Okay, unloadting everything from here. If you want me to remember, just delete this message.");
                                 e
                             });
                             d
@@ -248,7 +279,9 @@ impl serenity::client::EventHandler for Handler {
                         r
                     })
                     .await?;
-                *thread = None;
+
+                let mut thread_cache = self.thread_cache.lock().await;
+                thread_cache.unload(app_command.channel_id);
             }
 
             Ok::<_, anyhow::Error>(())
@@ -261,7 +294,7 @@ impl serenity::client::EventHandler for Handler {
 
     async fn guild_create(&self, ctx: serenity::client::Context, guild: serenity::model::guild::Guild) {
         if let Err(e) = (|| async {
-            let mut threads = self.threads.lock().await;
+            let mut thread_cache = self.thread_cache.lock().await;
             for thread in guild.threads.iter() {
                 if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
                     continue;
@@ -276,7 +309,7 @@ impl serenity::client::EventHandler for Handler {
                 }
 
                 log::info!("thread {} scheduled for load", thread.id);
-                threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(None)));
+                thread_cache.add(thread.id);
             }
 
             Ok::<_, anyhow::Error>(())
@@ -304,11 +337,11 @@ impl serenity::client::EventHandler for Handler {
                 log::warn!("could not pin first message: {:?}", e);
             }
 
-            let thread_info = Thread::new(&ctx.http, me_id, thread.id).await?;
+            let thread_info = ThreadInfo::new(&ctx.http, me_id, thread.id).await?;
             log::info!("thread {} joined: {:?}", thread.id, thread_info.primary_message);
 
-            let mut threads = self.threads.lock().await;
-            threads.insert(thread.id, std::sync::Arc::new(tokio::sync::Mutex::new(Some(thread_info))));
+            let mut thread_cache = self.thread_cache.lock().await;
+            thread_cache.load(&ctx.http, me_id, thread.id).await?;
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -324,21 +357,17 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             }
 
-            let mut threads = self.threads.lock().await;
+            let mut thread_cache = self.thread_cache.lock().await;
             if thread.thread_metadata.unwrap().archived {
                 log::info!("thread {} archived", thread.id);
-                threads.remove(&thread.id);
+                thread_cache.remove(thread.id);
             } else {
-                match threads.entry(thread.id) {
-                    std::collections::hash_map::Entry::Occupied(e) => {
-                        let mut t = e.get().lock().await;
-                        if let Some(t) = t.as_mut() {
-                            t.mode = ThreadMode::from_channel_name(&thread.name);
-                        }
-                    }
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(std::sync::Arc::new(tokio::sync::Mutex::new(None)));
-                    }
+                if let Some(t) = thread_cache.get(thread.id) {
+                    let mut t = t.lock().await;
+                    t.mode = ThreadMode::from_channel_name(&thread.name);
+                } else {
+                    // Should not happen.
+                    thread_cache.add(thread.id);
                 }
             }
 
@@ -352,9 +381,9 @@ impl serenity::client::EventHandler for Handler {
 
     async fn thread_delete(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::PartialGuildChannel) {
         if let Err(e) = (|| async {
-            let mut threads = self.threads.lock().await;
+            let mut thread_cache = self.thread_cache.lock().await;
             log::info!("thread {} deleted", thread.id);
-            threads.remove(&thread.id);
+            thread_cache.remove(thread.id);
             Ok::<_, anyhow::Error>(())
         })()
         .await
@@ -385,14 +414,10 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             }
 
-            let thread = {
-                let threads = self.threads.lock().await;
-                let thread = if let Some(thread) = threads.get(&new_message.channel_id) {
-                    thread
-                } else {
-                    return Ok(());
-                };
-                thread.clone()
+            let thread = if let Some(thread) = self.thread_cache.lock().await.load(&ctx.http, me_id, new_message.channel_id).await? {
+                thread
+            } else {
+                return Ok(());
             };
 
             let should_reply = new_message.author.id != me_id && new_message.mentions_user_id(me_id);
@@ -423,18 +448,6 @@ impl serenity::client::EventHandler for Handler {
             }
 
             let mut thread = thread.lock().await;
-
-            let thread = if let Some(thread) = thread.as_mut() {
-                thread
-            } else {
-                log::info!("thread {} loaded", new_message.channel_id);
-                *thread = Some(
-                    Thread::new(&ctx.http, me_id, new_message.channel_id)
-                        .await
-                        .map_err(|e| anyhow::format_err!("Thread::new: {}", e))?,
-                );
-                thread.as_mut().unwrap()
-            };
 
             while thread.messages.len() >= MAX_MESSAGE_BUFFER {
                 thread.messages.pop_first();
@@ -514,14 +527,16 @@ impl serenity::client::EventHandler for Handler {
                                     ThreadMode::Multi => format!(
                                         "{} at {} said:\n{}",
                                         resolver
-                                            .resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), message.author.id,)
+                                            .resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), message.author.id)
                                             .await
-                                            .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?,
+                                            .map_err(|e| anyhow::format_err!("resolve_display_name: {}", e))?
+                                            .to_owned(),
                                         new_message.timestamp.with_timezone(&chrono::Utc).to_rfc3339(),
                                         resolver
                                             .resolve_message(&ctx.http, new_message.guild_id.unwrap(), &message.content)
                                             .await
                                             .map_err(|e| anyhow::format_err!("resolve_message: {}", e))?
+                                            .to_owned()
                                     ),
                                 },
                             }
@@ -626,23 +641,14 @@ impl serenity::client::EventHandler for Handler {
 
     async fn message_update(&self, _ctx: serenity::client::Context, new_event: serenity::model::event::MessageUpdateEvent) {
         if let Err(e) = (|| async {
-            let thread = {
-                let threads = self.threads.lock().await;
-                let thread = if let Some(thread) = threads.get(&new_event.channel_id) {
-                    thread
-                } else {
-                    return Ok(());
-                };
-                thread.clone()
-            };
-
-            let mut thread = thread.lock().await;
-            let thread = if let Some(thread) = thread.as_mut() {
+            let thread = if let Some(thread) = self.thread_cache.lock().await.get(new_event.channel_id) {
                 thread
             } else {
+                // If the thread is not loaded, just ignore it.
                 return Ok(());
             };
 
+            let mut thread = thread.lock().await;
             let message = if new_event.id.0 == new_event.channel_id.0 {
                 &mut thread.primary_message
             } else if let Some(message) = thread.messages.get_mut(&new_event.id) {
@@ -709,19 +715,9 @@ impl serenity::client::EventHandler for Handler {
         _guild_id: Option<serenity::model::id::GuildId>,
     ) {
         if let Err(e) = (|| async {
-            let thread = {
-                let threads = self.threads.lock().await;
-                let thread = if let Some(thread) = threads.get(&channel_id) {
-                    thread
-                } else {
-                    return Ok(());
-                };
-                thread.clone()
-            };
-
-            let mut thread = thread.lock().await;
+            let mut thread_cache = self.thread_cache.lock().await;
             log::info!("thread {} flushed for message delete", channel_id);
-            *thread = None;
+            thread_cache.unload(channel_id);
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -739,19 +735,9 @@ impl serenity::client::EventHandler for Handler {
         _guild_id: Option<serenity::model::id::GuildId>,
     ) {
         if let Err(e) = (|| async {
-            let thread = {
-                let threads = self.threads.lock().await;
-                let thread = if let Some(thread) = threads.get(&channel_id) {
-                    thread
-                } else {
-                    return Ok(());
-                };
-                thread.clone()
-            };
-
-            let mut thread = thread.lock().await;
+            let mut thread_cache = self.thread_cache.lock().await;
             log::info!("thread {} flushed for message delete", channel_id);
-            *thread = None;
+            thread_cache.unload(channel_id);
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -805,14 +791,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         | serenity::model::gateway::GatewayIntents::GUILDS
         | serenity::model::gateway::GatewayIntents::GUILD_MEMBERS;
 
+    const DISPLAY_NAME_RESOLVER_CACHE_SIZE: usize = 2000;
+    const THREAD_CACHE_SIZE: usize = 2000;
+
     serenity::client::ClientBuilder::new(&config.discord_token, intents)
         .event_handler(Handler {
-            resolver: tokio::sync::Mutex::new(Resolver::new()),
+            resolver: tokio::sync::Mutex::new(Resolver::new(DISPLAY_NAME_RESOLVER_CACHE_SIZE)),
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
             tokenizer: tiktoken_rs::cl100k_base().unwrap(),
             config,
             chat_client,
-            threads: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            thread_cache: tokio::sync::Mutex::new(ThreadCache::new(THREAD_CACHE_SIZE)),
         })
         .await?
         .start()

@@ -140,6 +140,7 @@ impl ChatClient {
     }
 }
 
+#[allow(dead_code)]
 pub fn count_tokens(tokenizer: &tiktoken_rs::CoreBPE, messages: &[Message]) -> usize {
     // every reply is primed with <im_start>assistant
     messages.iter().map(|m| count_message_tokens(tokenizer, m)).sum::<usize>() + 2
