@@ -305,10 +305,6 @@ impl serenity::client::EventHandler for Handler {
                     thread.id.join_thread(&ctx.http).await?;
                 }
 
-                if thread.thread_metadata.unwrap().locked {
-                    thread.edit_thread(&ctx.http, |t| t.locked(false)).await?;
-                }
-
                 log::info!("thread {} scheduled for load", thread.id);
                 thread_cache.add(thread.id);
             }
@@ -364,12 +360,10 @@ impl serenity::client::EventHandler for Handler {
                 log::info!("thread {} archived", thread.id);
                 thread_cache.remove(thread.id);
             } else {
+                thread_cache.add(thread.id);
                 if let Some(t) = thread_cache.get(thread.id) {
                     let mut t = t.lock().await;
                     t.mode = ThreadMode::from_channel_name(&thread.name);
-                } else {
-                    // Should not happen.
-                    thread_cache.add(thread.id);
                 }
             }
 
@@ -459,8 +453,6 @@ impl serenity::client::EventHandler for Handler {
             if !should_reply || !can_reply {
                 return Ok(());
             }
-
-            new_message.channel_id.edit_thread(&ctx.http, |t| t.locked(true)).await?;
 
             let r = (|| async {
                 let settings = ChatSettings::new(&thread.primary_message.content)?;
@@ -632,7 +624,6 @@ impl serenity::client::EventHandler for Handler {
                     .map_err(|send_e| anyhow::format_err!("send error: {} ({})", send_e, e))?;
             }
 
-            new_message.channel_id.edit_thread(&ctx.http, |t| t.locked(false)).await?;
             r
         })()
         .await
