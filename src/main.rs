@@ -221,7 +221,7 @@ static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
 
 // Kind of janky, but whatever.
 static EMPTY_MESSAGE_REACTION: once_cell::sync::Lazy<serenity::model::channel::MessageReaction> =
-    once_cell::sync::Lazy::new(|| serde_json::from_str("{\"count\": 0, me: false, \"emoji\": {\"name\": \"\"}}").unwrap());
+    once_cell::sync::Lazy::new(|| serde_json::from_str("{\"count\": 0, \"me\": false, \"emoji\": {\"name\": \"\"}}").unwrap());
 
 const FORGET_COMMAND_NAME: &str = "forget";
 
