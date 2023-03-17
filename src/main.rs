@@ -412,10 +412,14 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             }
 
-            let thread = if let Some(thread) = self.thread_cache.lock().await.load(&ctx.http, me_id, new_message.channel_id).await? {
+            let thread = {
+                let mut thread_cache = self.thread_cache.lock().await;
+                let thread = if let Some(thread) = thread_cache.load(&ctx.http, me_id, new_message.channel_id).await? {
+                    thread
+                } else {
+                    return Ok(());
+                };
                 thread
-            } else {
-                return Ok(());
             };
 
             let should_reply = new_message.author.id != me_id && new_message.mentions_user_id(me_id);
@@ -443,6 +447,7 @@ impl serenity::client::EventHandler for Handler {
                         })
                     })
                     .await?;
+                return Ok(());
             }
 
             let mut thread = thread.lock().await;
@@ -636,11 +641,15 @@ impl serenity::client::EventHandler for Handler {
 
     async fn message_update(&self, _ctx: serenity::client::Context, new_event: serenity::model::event::MessageUpdateEvent) {
         if let Err(e) = (|| async {
-            let thread = if let Some(thread) = self.thread_cache.lock().await.get(new_event.channel_id) {
+            let thread = {
+                let mut thread_cache = self.thread_cache.lock().await;
+                let thread = if let Some(thread) = thread_cache.get(new_event.channel_id) {
+                    thread
+                } else {
+                    // If the thread is not loaded, just ignore it.
+                    return Ok(());
+                };
                 thread
-            } else {
-                // If the thread is not loaded, just ignore it.
-                return Ok(());
             };
 
             let mut thread = thread.lock().await;
