@@ -233,7 +233,7 @@ static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
 static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\s*<@!?(?P<user_id>\d+)>\s*").unwrap());
 
-const FORGET_COMMAND_NAME: &str = "unload";
+const FORGET_COMMAND_NAME: &str = "forget";
 
 #[async_trait::async_trait]
 impl serenity::client::EventHandler for Handler {
@@ -272,7 +272,7 @@ impl serenity::client::EventHandler for Handler {
                         r.interaction_response_data(|d| {
                             d.embed(|e| {
                                 e.color(serenity::utils::colours::css::POSITIVE);
-                                e.description("Okay, unloadting everything from here. If you want me to remember, just delete this message.");
+                                e.description("Okay, forgetting everything from here. If you want me to remember, just delete this message.");
                                 e
                             });
                             d
