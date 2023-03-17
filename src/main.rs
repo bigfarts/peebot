@@ -182,24 +182,25 @@ struct Handler {
 }
 
 struct ThreadCache {
-    thread_ids: std::collections::HashSet<serenity::model::id::ChannelId>,
+    ids: std::collections::HashSet<serenity::model::id::ChannelId>,
     infos: lru::LruCache<serenity::model::id::ChannelId, std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>>,
 }
 
 impl ThreadCache {
     fn new(cache_size: usize) -> Self {
         Self {
-            thread_ids: std::collections::HashSet::new(),
+            ids: std::collections::HashSet::new(),
             infos: lru::LruCache::new(std::num::NonZeroUsize::new(cache_size).unwrap()),
         }
     }
 
     fn add(&mut self, thread_id: serenity::model::id::ChannelId) {
-        self.thread_ids.insert(thread_id);
+        self.ids.insert(thread_id);
     }
 
     fn remove(&mut self, thread_id: serenity::model::id::ChannelId) {
-        self.thread_ids.remove(&thread_id);
+        self.ids.remove(&thread_id);
+        self.unload(thread_id);
     }
 
     fn get(&mut self, thread_id: serenity::model::id::ChannelId) -> Option<std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>> {
@@ -212,7 +213,7 @@ impl ThreadCache {
         me_id: serenity::model::id::UserId,
         thread_id: serenity::model::id::ChannelId,
     ) -> Result<Option<std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>>, serenity::Error> {
-        if !self.thread_ids.contains(&thread_id) {
+        if !self.ids.contains(&thread_id) {
             return Ok(None);
         }
 
