@@ -217,6 +217,10 @@ impl ThreadCache {
             return Ok(None);
         }
 
+        if let Some(info) = self.infos.get(&thread_id) {
+            return Ok(Some(info.clone()));
+        }
+
         let thread_info = std::sync::Arc::new(tokio::sync::Mutex::new(ThreadInfo::new(http, me_id, thread_id).await?));
         self.infos.put(thread_id, thread_info.clone());
         Ok(Some(thread_info))
@@ -457,7 +461,7 @@ impl serenity::client::EventHandler for Handler {
             }
             thread.messages.insert(new_message.id, new_message.clone());
 
-            if !should_reply || !can_reply {
+            if !should_reply {
                 return Ok(());
             }
 
