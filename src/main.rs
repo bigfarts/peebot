@@ -243,7 +243,7 @@ impl serenity::client::EventHandler for Handler {
             serenity::model::application::command::Command::create_global_application_command(&ctx.http, |command| {
                 command
                     .name(FORGET_COMMAND_NAME)
-                    .description("Add a break in the chat log to unload everything before it.")
+                    .description("Add a break in the chat log to forget everything before it.")
             })
             .await?;
 
