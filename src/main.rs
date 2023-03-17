@@ -342,6 +342,7 @@ impl serenity::client::EventHandler for Handler {
             log::info!("thread {} joined: {:?}", thread.id, thread_info.primary_message);
 
             let mut thread_cache = self.thread_cache.lock().await;
+            thread_cache.add(thread.id);
             thread_cache.load(&ctx.http, me_id, thread.id).await?;
 
             Ok::<_, anyhow::Error>(())
