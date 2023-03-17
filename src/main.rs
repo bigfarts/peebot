@@ -339,6 +339,8 @@ impl serenity::client::EventHandler for Handler {
 
             let mut thread_cache = self.thread_cache.lock().await;
             thread_cache.add(thread.id);
+
+            // Optimization only, not strictly required.
             thread_cache.load(&ctx.http, me_id, thread.id).await?;
 
             Ok::<_, anyhow::Error>(())
