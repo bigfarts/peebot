@@ -106,7 +106,11 @@ impl Resolver {
         }
     }
 
-    fn add_display_name(&mut self, guild_id: serenity::model::id::GuildId, user_id: serenity::model::id::UserId, name: String) {
+    fn hint_display_name(&mut self, guild_id: serenity::model::id::GuildId, user_id: serenity::model::id::UserId, name: String) {
+        if !self.display_names.contains(&(guild_id, user_id)) {
+            // If we don't have the display name cached, don't add it.
+            return;
+        }
         self.display_names.put((guild_id, user_id), name);
     }
 
@@ -375,7 +379,7 @@ impl serenity::client::EventHandler for Handler {
     async fn guild_member_update(&self, _ctx: serenity::client::Context, event: serenity::model::event::GuildMemberUpdateEvent) {
         if let Err(e) = (|| async {
             let mut resolver = self.resolver.lock().await;
-            resolver.add_display_name(event.guild_id, event.user.id, event.nick.unwrap_or(event.user.name));
+            resolver.hint_display_name(event.guild_id, event.user.id, event.nick.unwrap_or(event.user.name));
             Ok::<_, anyhow::Error>(())
         })()
         .await
