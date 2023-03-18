@@ -191,7 +191,7 @@ impl ThreadCache {
 
     fn remove(&mut self, thread_id: serenity::model::id::ChannelId) {
         self.ids.remove(&thread_id);
-        self.unload(thread_id);
+        self.infos.pop(&thread_id);
     }
 
     fn get(&mut self, thread_id: serenity::model::id::ChannelId) -> Option<std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>> {
@@ -215,16 +215,13 @@ impl ThreadCache {
         self.infos.put(thread_id, thread_info.clone());
         Ok(Some(thread_info))
     }
-
-    fn unload(&mut self, thread_id: serenity::model::id::ChannelId) {
-        self.infos.pop(&thread_id);
-    }
 }
 
 static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\s*<@!?(?P<user_id>\d+)>\s*").unwrap());
 
 const FORGET_COMMAND_NAME: &str = "forget";
+const INJECT_COMMAND_NAME: &str = "inject";
 
 #[async_trait::async_trait]
 impl serenity::client::EventHandler for Handler {
@@ -235,6 +232,18 @@ impl serenity::client::EventHandler for Handler {
                 command
                     .name(FORGET_COMMAND_NAME)
                     .description("Add a break in the chat log to forget everything before it.")
+            })
+            .await?;
+            serenity::model::application::command::Command::create_global_application_command(&ctx.http, |command| {
+                command
+                    .name(INJECT_COMMAND_NAME)
+                    .description("Just make me say something directly.")
+                    .create_option(|o| {
+                        o.name("Content")
+                            .description("The text to say.")
+                            .kind(serenity::model::application::command::CommandOptionType::String)
+                            .required(true)
+                    })
             })
             .await?;
 
@@ -254,26 +263,34 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             };
 
-            if app_command.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
-                && app_command.data.name == FORGET_COMMAND_NAME
-            {
-                log::info!("thread {} flushed for unload", app_command.channel_id);
-                app_command
-                    .create_interaction_response(&ctx.http, |r| {
-                        r.interaction_response_data(|d| {
-                            d.embed(|e| {
-                                e.color(serenity::utils::colours::css::POSITIVE);
-                                e.description("Okay, forgetting everything from here. If you want me to remember, just delete this message.");
-                                e
-                            });
-                            d
-                        });
-                        r
-                    })
-                    .await?;
-
-                let mut thread_cache = self.thread_cache.lock().await;
-                thread_cache.unload(app_command.channel_id);
+            match app_command.kind {
+                serenity::model::application::interaction::InteractionType::ApplicationCommand => match app_command.data.name.as_str() {
+                    FORGET_COMMAND_NAME => {
+                        app_command
+                            .create_interaction_response(&ctx.http, |r| {
+                                r.interaction_response_data(|d| {
+                                    d.embed(|e| {
+                                        e.color(serenity::utils::colours::css::POSITIVE).description(
+                                            "Okay, forgetting everything from here. If you want me to remember, just delete this message.",
+                                        )
+                                    })
+                                })
+                            })
+                            .await?;
+                    }
+                    INJECT_COMMAND_NAME => {
+                        let content = if let Some(content) = app_command.data.options.get(0).and_then(|v| v.value.as_ref()).and_then(|v| v.as_str()) {
+                            content
+                        } else {
+                            return Ok(());
+                        };
+                        app_command
+                            .create_interaction_response(&ctx.http, |r| r.interaction_response_data(|d| d.content(content)))
+                            .await?;
+                    }
+                    _ => {}
+                },
+                _ => {}
             }
 
             Ok::<_, anyhow::Error>(())
@@ -490,6 +507,7 @@ impl serenity::client::EventHandler for Handler {
 
                         if message.kind != serenity::model::channel::MessageType::Regular
                             && message.kind != serenity::model::channel::MessageType::InlineReply
+                            && message.kind != serenity::model::channel::MessageType::ChatInputCommand
                         {
                             continue;
                         }
