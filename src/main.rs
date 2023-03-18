@@ -391,12 +391,6 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             let me_id = self.me_id.lock().clone();
 
-            if new_message.kind != serenity::model::channel::MessageType::Regular
-                && new_message.kind != serenity::model::channel::MessageType::InlineReply
-            {
-                return Ok(());
-            }
-
             let thread = {
                 let mut thread_cache = self.thread_cache.lock().await;
                 let thread = if let Some(thread) = thread_cache.load(&ctx.http, new_message.channel_id).await? {
@@ -407,7 +401,11 @@ impl serenity::client::EventHandler for Handler {
                 thread
             };
 
-            let should_reply = new_message.author.id != me_id && new_message.mentions_user_id(me_id);
+            let should_reply = new_message.author.id != me_id
+                && new_message.mentions_user_id(me_id)
+                && (new_message.kind == serenity::model::channel::MessageType::Regular
+                    || new_message.kind == serenity::model::channel::MessageType::InlineReply);
+
             let can_reply = thread.try_lock().is_ok();
 
             if should_reply && !can_reply {
