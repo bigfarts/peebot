@@ -4,8 +4,6 @@ mod unichunk;
 use clap::Parser;
 use futures_util::StreamExt;
 
-const MAX_MESSAGE_BUFFER: usize = 2000;
-
 #[derive(Debug, PartialEq)]
 enum ThreadMode {
     Single,
@@ -68,11 +66,15 @@ struct ThreadInfo {
 }
 
 impl ThreadInfo {
-    async fn new(http: impl AsRef<serenity::http::Http>, id: serenity::model::id::ChannelId) -> Result<Self, serenity::Error> {
+    async fn new(
+        http: impl AsRef<serenity::http::Http>,
+        id: serenity::model::id::ChannelId,
+        message_history_size: usize,
+    ) -> Result<Self, serenity::Error> {
         let primary_message = id.message(&http, id.0).await?;
         let mut messages = std::collections::BTreeMap::new();
 
-        let mut messages_it = Box::pin(id.messages_iter(&http)).take(MAX_MESSAGE_BUFFER);
+        let mut messages_it = Box::pin(id.messages_iter(&http)).take(message_history_size);
         while let Some(message) = messages_it.next().await {
             let message = message?;
             if message.id.0 == id.0 {
@@ -202,6 +204,7 @@ impl ThreadCache {
         &mut self,
         http: impl AsRef<serenity::http::Http>,
         thread_id: serenity::model::id::ChannelId,
+        message_history_size: usize,
     ) -> Result<Option<std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>>, serenity::Error> {
         if !self.ids.contains(&thread_id) {
             return Ok(None);
@@ -211,7 +214,7 @@ impl ThreadCache {
             return Ok(Some(info.clone()));
         }
 
-        let thread_info = std::sync::Arc::new(tokio::sync::Mutex::new(ThreadInfo::new(http, thread_id).await?));
+        let thread_info = std::sync::Arc::new(tokio::sync::Mutex::new(ThreadInfo::new(http, thread_id, message_history_size).await?));
         self.infos.put(thread_id, thread_info.clone());
         Ok(Some(thread_info))
     }
@@ -344,7 +347,7 @@ impl serenity::client::EventHandler for Handler {
             thread_cache.add(thread.id);
 
             // Optimization only, not strictly required.
-            thread_cache.load(&ctx.http, thread.id).await?;
+            thread_cache.load(&ctx.http, thread.id, self.config.message_history_size).await?;
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -411,7 +414,10 @@ impl serenity::client::EventHandler for Handler {
 
             let thread = {
                 let mut thread_cache = self.thread_cache.lock().await;
-                let thread = if let Some(thread) = thread_cache.load(&ctx.http, new_message.channel_id).await? {
+                let thread = if let Some(thread) = thread_cache
+                    .load(&ctx.http, new_message.channel_id, self.config.message_history_size)
+                    .await?
+                {
                     thread
                 } else {
                     return Ok(());
@@ -453,7 +459,7 @@ impl serenity::client::EventHandler for Handler {
 
             let mut thread = thread.lock().await;
 
-            while thread.messages.len() >= MAX_MESSAGE_BUFFER {
+            while thread.messages.len() >= self.config.message_history_size {
                 thread.messages.pop_first();
             }
             thread.messages.insert(new_message.id, new_message.clone());
@@ -951,6 +957,18 @@ const fn max_tokens_default() -> u32 {
     4096
 }
 
+const fn display_name_resolver_cache_size_default() -> usize {
+    2000
+}
+
+const fn thread_cache_size_default() -> usize {
+    2000
+}
+
+const fn message_history_size_default() -> usize {
+    2000
+}
+
 #[derive(serde::Deserialize)]
 struct Config {
     openai_token: String,
@@ -960,6 +978,12 @@ struct Config {
     max_input_tokens: u32,
     #[serde(default = "max_tokens_default")]
     max_tokens: u32,
+    #[serde(default = "display_name_resolver_cache_size_default")]
+    display_name_resolver_cache_size: usize,
+    #[serde(default = "thread_cache_size_default")]
+    thread_cache_size: usize,
+    #[serde(default = "message_history_size_default")]
+    message_history_size: usize,
 }
 
 #[tokio::main]
@@ -981,17 +1005,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         | serenity::model::gateway::GatewayIntents::GUILDS
         | serenity::model::gateway::GatewayIntents::GUILD_MEMBERS;
 
-    const DISPLAY_NAME_RESOLVER_CACHE_SIZE: usize = 2000;
-    const THREAD_CACHE_SIZE: usize = 2000;
+    let resolver = tokio::sync::Mutex::new(Resolver::new(config.display_name_resolver_cache_size));
+    let thread_cache = tokio::sync::Mutex::new(ThreadCache::new(config.thread_cache_size));
 
     serenity::client::ClientBuilder::new(&config.discord_token, intents)
         .event_handler(Handler {
-            resolver: tokio::sync::Mutex::new(Resolver::new(DISPLAY_NAME_RESOLVER_CACHE_SIZE)),
+            resolver,
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
             tokenizer: tiktoken_rs::cl100k_base().unwrap(),
             config,
             chat_client,
-            thread_cache: tokio::sync::Mutex::new(ThreadCache::new(THREAD_CACHE_SIZE)),
+            thread_cache,
         })
         .await?
         .start()
