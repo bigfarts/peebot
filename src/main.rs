@@ -228,22 +228,22 @@ impl serenity::client::EventHandler for Handler {
     async fn ready(&self, ctx: serenity::client::Context, data_about_bot: serenity::model::gateway::Ready) {
         if let Err(e) = (|| async {
             *self.me_id.lock() = data_about_bot.user.id;
-            serenity::model::application::command::Command::create_global_application_command(&ctx.http, |command| {
-                command
-                    .name(FORGET_COMMAND_NAME)
-                    .description("Add a break in the chat log to forget everything before it.")
-            })
-            .await?;
-            serenity::model::application::command::Command::create_global_application_command(&ctx.http, |command| {
-                command
-                    .name(INJECT_COMMAND_NAME)
-                    .description("Just make me say something directly.")
-                    .create_option(|o| {
-                        o.name("content")
-                            .description("The text to say.")
-                            .kind(serenity::model::application::command::CommandOptionType::String)
-                            .required(true)
-                    })
+
+            serenity::model::application::command::Command::set_global_application_commands(&ctx.http, |cmds| {
+                cmds.create_application_command(|c| {
+                    c.name(FORGET_COMMAND_NAME)
+                        .description("Add a break in the chat log to forget everything before it.")
+                })
+                .create_application_command(|c| {
+                    c.name(INJECT_COMMAND_NAME)
+                        .description("Just make me say something directly.")
+                        .create_option(|o| {
+                            o.name("content")
+                                .description("The text to say.")
+                                .kind(serenity::model::application::command::CommandOptionType::String)
+                                .required(true)
+                        })
+                })
             })
             .await?;
 
