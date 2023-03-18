@@ -821,9 +821,12 @@ impl serenity::client::EventHandler for Handler {
                 .iter()
                 .map(|r| {
                     let mut r = r.clone();
-                    if r.reaction_type == reaction.emoji {
-                        r.count -= 1;
+
+                    if r.reaction_type != reaction.emoji {
+                        return r;
                     }
+
+                    r.count -= 1;
                     if reaction
                         .member
                         .as_ref()
@@ -832,6 +835,7 @@ impl serenity::client::EventHandler for Handler {
                     {
                         r.me = false;
                     }
+
                     r
                 })
                 .filter(|r| r.count > 0)
