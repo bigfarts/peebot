@@ -30,10 +30,11 @@ struct ChatSettings {
 
 static FORGET_EMOJI: &str = "❌";
 
-static STRIP_TRAILING_WHITESPACE_REGEX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| regex::Regex::new(r"[ \t]+\n").unwrap());
-
 impl ChatSettings {
     fn new(s: &str) -> Result<Self, anyhow::Error> {
+        static STRIP_TRAILING_WHITESPACE_REGEX: once_cell::sync::Lazy<regex::Regex> =
+            once_cell::sync::Lazy::new(|| regex::Regex::new(r"[ \t]+\n").unwrap());
+
         let s = STRIP_TRAILING_WHITESPACE_REGEX.replace_all(s, "\n");
         let parts = s
             .split("\n---\n")
@@ -131,6 +132,9 @@ impl Resolver {
         let mut s = String::new();
         let mut last_index = 0;
 
+        static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
+            once_cell::sync::Lazy::new(|| regex::Regex::new(r"<@!?(?P<user_id>\d+)>|<a?:(?P<emoji_name>\w+):\d+>|<#(?P<channel_id>\d+)>").unwrap());
+
         for capture in RESOLVE_MESSAGE_REGEX.captures_iter(content) {
             let m = capture.get(0).unwrap();
 
@@ -213,15 +217,8 @@ impl ThreadCache {
     }
 }
 
-static RESOLVE_MESSAGE_REGEX: once_cell::sync::Lazy<regex::Regex> =
-    once_cell::sync::Lazy::new(|| regex::Regex::new(r"<@!?(?P<user_id>\d+)>|<a?:(?P<emoji_name>\w+):\d+>|<#(?P<channel_id>\d+)>").unwrap());
-
 static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\s*<@!?(?P<user_id>\d+)>\s*").unwrap());
-
-// Kind of janky, but whatever.
-static EMPTY_MESSAGE_REACTION: once_cell::sync::Lazy<serenity::model::channel::MessageReaction> =
-    once_cell::sync::Lazy::new(|| serde_json::from_str("{\"count\": 0, \"me\": false, \"emoji\": {\"name\": \"\"}}").unwrap());
 
 const FORGET_COMMAND_NAME: &str = "forget";
 
@@ -744,6 +741,10 @@ impl serenity::client::EventHandler for Handler {
             let message_reaction = if let Some(message_reaction) = message.reactions.iter_mut().find(|r| r.reaction_type == reaction.emoji) {
                 message_reaction
             } else {
+                // Kind of janky, but whatever.
+                static EMPTY_MESSAGE_REACTION: once_cell::sync::Lazy<serenity::model::channel::MessageReaction> =
+                    once_cell::sync::Lazy::new(|| serde_json::from_str("{\"count\": 0, \"me\": false, \"emoji\": {\"name\": \"\"}}").unwrap());
+
                 let mut message_reaction = EMPTY_MESSAGE_REACTION.clone();
                 message_reaction.count = 0;
                 message_reaction.me = reaction
