@@ -239,7 +239,7 @@ impl serenity::client::EventHandler for Handler {
                     .name(INJECT_COMMAND_NAME)
                     .description("Just make me say something directly.")
                     .create_option(|o| {
-                        o.name("Content")
+                        o.name("content")
                             .description("The text to say.")
                             .kind(serenity::model::application::command::CommandOptionType::String)
                             .required(true)
