@@ -473,10 +473,6 @@ impl serenity::client::EventHandler for Handler {
                     let mut messages = vec![];
 
                     for (_, message) in thread.messages.iter().rev() {
-                        if message.content.is_empty() {
-                            continue;
-                        }
-
                         if message.author.id == me_id {
                             if let Some(interaction) = message.interaction.as_ref() {
                                 if interaction.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
@@ -485,6 +481,10 @@ impl serenity::client::EventHandler for Handler {
                                     break;
                                 }
                             }
+                        }
+
+                        if message.content.is_empty() {
+                            continue;
                         }
 
                         if message.kind != serenity::model::channel::MessageType::Regular
