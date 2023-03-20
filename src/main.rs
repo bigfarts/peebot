@@ -657,6 +657,15 @@ impl serenity::client::EventHandler for Handler {
                                 .color(serenity::utils::colours::css::DANGER)
                                 .description(format!("{:?}", e))
                                 .field("Original message", format!("```\n{}\n```", new_message.content), false)
+                                .footer(|f| {
+                                    f.icon_url(
+                                        new_message
+                                            .author
+                                            .static_avatar_url()
+                                            .unwrap_or_else(|| new_message.author.default_avatar_url()),
+                                    )
+                                    .text(format!("{}#{:04}", new_message.author.name, new_message.author.discriminator))
+                                })
                         })
                     })
                     .await
