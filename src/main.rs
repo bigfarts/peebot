@@ -656,11 +656,12 @@ impl serenity::client::EventHandler for Handler {
                             em.title("Error")
                                 .color(serenity::utils::colours::css::DANGER)
                                 .description(format!("{:?}", e))
+                                .field("Original message", format!("```\n{}\n```", new_message.content), false)
                         })
-                        .reference_message(&new_message)
                     })
                     .await
                     .map_err(|send_e| anyhow::format_err!("send error: {} ({})", send_e, e))?;
+                ctx.http.delete_message(new_message.channel_id.0, new_message.id.0).await?;
             }
 
             r
