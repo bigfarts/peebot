@@ -4,6 +4,12 @@ pub struct Backend {
     tokenizer: tiktoken_rs::CoreBPE,
 }
 
+#[derive(serde::Deserialize)]
+pub struct Config {
+    api_key: String,
+    deployment_url: String,
+}
+
 fn convert_message(message: &super::Message) -> String {
     let mut buf = String::new();
     buf.push_str("<|im_start|>");
@@ -22,15 +28,20 @@ fn convert_message(message: &super::Message) -> String {
 }
 
 impl Backend {
-    pub fn new(api_key: impl AsRef<str>, deployment_url: String, tokenizer: tiktoken_rs::CoreBPE) -> Self {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
-        headers.insert(reqwest::header::AUTHORIZATION, format!("Basic {}", api_key.as_ref()).parse().unwrap());
-        Self {
-            client: reqwest::ClientBuilder::new().default_headers(headers).build().unwrap(),
-            deployment_url,
-            tokenizer,
-        }
+    pub fn new(config: &Config) -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            client: reqwest::ClientBuilder::new()
+                .default_headers({
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+                    headers.insert(reqwest::header::AUTHORIZATION, format!("Basic {}", config.api_key).parse().unwrap());
+                    headers
+                })
+                .build()
+                .unwrap(),
+            deployment_url: config.deployment_url.clone(),
+            tokenizer: tiktoken_rs::cl100k_base()?,
+        })
     }
 }
 

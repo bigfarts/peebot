@@ -6,13 +6,23 @@ pub struct Backend {
     tokenizer: tiktoken_rs::CoreBPE,
 }
 
+#[derive(serde::Deserialize)]
+pub struct Config {
+    api_key: String,
+    model: String,
+}
+
 impl Backend {
-    pub fn new(api_key: String, model: String, tokenizer: tiktoken_rs::CoreBPE) -> Self {
-        Self {
-            client: crate::openai::ChatClient::new(api_key),
-            model,
-            tokenizer,
-        }
+    pub fn new(config: &Config) -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            client: crate::openai::ChatClient::new(config.api_key.clone()),
+            model: config.model.clone(),
+            tokenizer: if config.model == "gpt-3.5-turbo" {
+                tiktoken_rs::cl100k_base()?
+            } else {
+                return Err(anyhow::anyhow!("unknown model"));
+            },
+        })
     }
 }
 

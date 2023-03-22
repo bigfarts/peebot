@@ -51,7 +51,6 @@ struct ModelSettings {
 
 #[derive(Debug)]
 struct ThreadInfo {
-    parent_channel_id: serenity::model::id::ChannelId,
     primary_message: serenity::model::channel::Message,
     messages: std::collections::BTreeMap<serenity::model::id::MessageId, serenity::model::channel::Message>,
     mode: ThreadMode,
@@ -83,7 +82,6 @@ impl ThreadInfo {
         };
 
         let mut ti = Self {
-            parent_channel_id: channel.parent_id.unwrap(),
             primary_message,
             messages,
             mode: ThreadMode::Single,
@@ -1042,27 +1040,15 @@ const fn thread_cache_size_default() -> usize {
 const fn message_history_size_default() -> usize {
     2000
 }
-
 #[derive(serde::Deserialize)]
-struct OpenAIChatBackendConfig {
-    api_key: String,
-}
-
-#[derive(serde::Deserialize)]
-struct SpellbookBackendConfig {
-    api_key: String,
-    deployment_url: String,
-}
-
-#[derive(serde::Deserialize)]
-struct BackendsConfig {
-    openai_chat: Option<OpenAIChatBackendConfig>,
-    spellbook: Option<SpellbookBackendConfig>,
+struct BackendConfig {
+    r#type: String,
+    config: toml::Value,
 }
 
 #[derive(serde::Deserialize)]
 struct Config {
-    backends: BackendsConfig,
+    backends: std::collections::HashMap<String, BackendConfig>,
 
     discord_token: String,
 
@@ -1097,28 +1083,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = toml::from_str::<Config>(std::str::from_utf8(&std::fs::read(opts.config)?)?)?;
 
     let mut backends: std::collections::HashMap<String, Box<dyn backend::Backend + Sync + Send>> = std::collections::HashMap::new();
-
-    // TODO: Don't hardcode these.
-    if let Some(openai_chat_backend_config) = config.backends.openai_chat.as_ref() {
-        backends.insert(
-            "gpt-3.5".to_string(),
-            Box::new(backend::openai_chat::Backend::new(
-                openai_chat_backend_config.api_key.clone(),
-                "gpt-3.5-turbo".to_string(),
-                tiktoken_rs::cl100k_base().unwrap(),
-            )),
-        );
-    }
-
-    if let Some(spellbook_backend_config) = config.backends.spellbook.as_ref() {
-        backends.insert(
-            "gpt-4".to_string(),
-            Box::new(backend::spellbook::Backend::new(
-                spellbook_backend_config.api_key.clone(),
-                spellbook_backend_config.deployment_url.clone(),
-                tiktoken_rs::cl100k_base().unwrap(),
-            )),
-        );
+    for (name, c) in config.backends.iter() {
+        backends.insert(name.clone(), backend::new_backend_from_config(c.r#type.clone(), c.config.clone())?);
     }
 
     let intents = serenity::model::gateway::GatewayIntents::default()

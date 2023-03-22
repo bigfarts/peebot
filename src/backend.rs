@@ -36,3 +36,19 @@ pub trait Backend {
     fn request_timeout(&self) -> std::time::Duration;
     fn chunk_timeout(&self) -> std::time::Duration;
 }
+
+pub fn new_backend_from_config(typ: String, config: toml::Value) -> Result<Box<dyn Backend + Send + Sync>, anyhow::Error> {
+    Ok(match typ.as_str() {
+        "openai_chat" => {
+            let config = config.try_into()?;
+            Box::new(openai_chat::Backend::new(&config)?)
+        }
+        "spellbook" => {
+            let config = config.try_into()?;
+            Box::new(spellbook::Backend::new(&config)?)
+        }
+        _ => {
+            return Err(anyhow::format_err!("unknown backend type: {}", typ));
+        }
+    })
+}
