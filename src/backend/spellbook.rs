@@ -71,10 +71,8 @@ impl super::Backend for Backend {
             return Err(anyhow::format_err!("{:?} ({:?})", e, body));
         }
 
-        let resp = resp.json::<Response>().await?;
-
         Ok(Box::pin(async_stream::try_stream! {
-            yield resp.output;
+            yield resp.json::<Response>().await?.output;
         }))
     }
 
