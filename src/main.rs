@@ -94,6 +94,7 @@ impl ThreadInfo {
     }
 
     fn update_from_tags(&mut self, thread: &serenity::model::channel::GuildChannel) {
+        log::info!("{:?} {:?}", thread.available_tags, thread.applied_tags);
         let available_tags = thread
             .available_tags
             .iter()
