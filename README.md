@@ -18,7 +18,6 @@ temperature = 1.0           # 0.0...2.0
 top_p = 1.0                 # 0.0...1.0
 presence_penalty = 0.0      # -2.0...2.0
 frequency_penalty = 0.0     # -2.0...2.0
-max_output_tokens = 4096    # 0...4096
 ```
 
 ### spellbook

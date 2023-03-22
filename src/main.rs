@@ -177,12 +177,17 @@ impl Resolver {
     }
 }
 
+struct BackendBinding {
+    max_input_tokens: u32,
+    backend: Box<dyn backend::Backend + Send + Sync>,
+}
+
 struct Handler {
     resolver: tokio::sync::Mutex<Resolver>,
     me_id: parking_lot::Mutex<serenity::model::id::UserId>,
     config: Config,
     parent_channel_id: serenity::model::id::ChannelId,
-    backends: indexmap::IndexMap<String, Box<dyn backend::Backend + Send + Sync>>,
+    backends: indexmap::IndexMap<String, BackendBinding>,
     thread_cache: tokio::sync::Mutex<ThreadCache>,
     tags: tokio::sync::Mutex<std::collections::HashMap<serenity::model::id::ForumTagId, String>>,
 }
@@ -550,7 +555,7 @@ impl serenity::client::EventHandler for Handler {
 
             let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-            let (backend_name, backend) = if let Some((backend_name, backend)) = thread
+            let (backend_name, BackendBinding { backend, max_input_tokens }) = if let Some((backend_name, backend)) = thread
                 .backend
                 .as_ref()
                 .and_then(|backend_name| self.backends.get(backend_name).map(|backend| (backend_name, backend)))
@@ -580,6 +585,7 @@ impl serenity::client::EventHandler for Handler {
                         } else {
                             settings.system_message.clone()
                         },
+                        mentioned: false,
                     };
 
                     let mut input_tokens = backend.num_overhead_tokens() + backend.count_message_tokens(&system_message);
@@ -636,10 +642,16 @@ impl serenity::client::EventHandler for Handler {
                                 },
                                 name: None,
                                 content: message.content.clone(),
+                                mentioned: false,
                             }
                         } else {
                             backend::Message {
-                                role: backend::Role::User,
+                                role: backend::Role::User(
+                                    resolver
+                                        .resolve_display_name(&ctx.http, new_message.guild_id.unwrap(), message.author.id)
+                                        .await?
+                                        .to_string(),
+                                ),
                                 name: None,
                                 content: match thread.mode {
                                     ThreadMode::Single => {
@@ -677,12 +689,13 @@ impl serenity::client::EventHandler for Handler {
                                             .to_owned()
                                     ),
                                 },
+                                mentioned: message.mentions_user_id(me_id),
                             }
                         };
 
                         let message_tokens = backend.count_message_tokens(&oai_message);
 
-                        if input_tokens + message_tokens > self.config.max_input_tokens as usize {
+                        if input_tokens + message_tokens > *max_input_tokens as usize {
                             break;
                         }
 
@@ -1069,15 +1082,23 @@ const fn message_history_size_default() -> usize {
 }
 
 #[derive(serde::Deserialize)]
+struct BackendConfig {
+    r#type: String,
+
+    #[serde(default = "max_input_tokens_default")]
+    max_input_tokens: u32,
+
+    #[serde(flatten)]
+    rest: toml::Value,
+}
+
+#[derive(serde::Deserialize)]
 struct Config {
-    backends: indexmap::IndexMap<String, toml::Value>,
+    backends: indexmap::IndexMap<String, BackendConfig>,
 
     discord_token: String,
 
     parent_channel_id: u64,
-
-    #[serde(default = "max_input_tokens_default")]
-    max_input_tokens: u32,
 
     #[serde(default = "display_name_resolver_cache_size_default")]
     display_name_resolver_cache_size: usize,
@@ -1099,11 +1120,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = toml::from_str::<Config>(std::str::from_utf8(&std::fs::read(opts.config)?)?)?;
 
-    let mut backends: indexmap::IndexMap<String, Box<dyn backend::Backend + Sync + Send>> = indexmap::IndexMap::new();
+    let mut backends: indexmap::IndexMap<String, BackendBinding> = indexmap::IndexMap::new();
     for (name, c) in config.backends.iter() {
         backends.insert(
             name.clone(),
-            backend::new_backend_from_config(c.get("type").unwrap().as_str().unwrap().to_string(), c.clone())?,
+            BackendBinding {
+                max_input_tokens: c.max_input_tokens,
+                backend: backend::new_backend_from_config(c.r#type.clone(), c.rest.clone())?,
+            },
         );
     }
 

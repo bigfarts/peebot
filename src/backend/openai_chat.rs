@@ -4,22 +4,23 @@ pub struct Backend {
     client: crate::openai::ChatClient,
     model: String,
     tokenizer: tiktoken_rs::CoreBPE,
+    max_total_tokens: u32,
 }
 
 #[derive(serde::Deserialize)]
 pub struct Config {
     api_key: String,
     model: String,
+    max_total_tokens: u32,
 }
 
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+
 struct Parameters {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub frequency_penalty: Option<f64>,
     pub presence_penalty: Option<f64>,
-    pub max_total_tokens: Option<u32>,
 }
 
 impl Backend {
@@ -32,6 +33,7 @@ impl Backend {
             } else {
                 return Err(anyhow::anyhow!("unknown model"));
             },
+            max_total_tokens: config.max_total_tokens,
         })
     }
 }
@@ -43,7 +45,7 @@ fn convert_message(m: &super::Message) -> crate::openai::Message {
         role: match m.role {
             super::Role::System => crate::openai::Role::System,
             super::Role::Assistant => crate::openai::Role::Assistant,
-            super::Role::User => crate::openai::Role::User,
+            super::Role::User(..) => crate::openai::Role::User,
         },
     }
 }
@@ -65,8 +67,7 @@ impl super::Backend for Backend {
             frequency_penalty: parameters.frequency_penalty,
             presence_penalty: parameters.presence_penalty,
             max_tokens: Some(
-                parameters.max_total_tokens.unwrap_or(4096)
-                    - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
+                self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
             ),
         };
 

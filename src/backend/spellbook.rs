@@ -18,7 +18,7 @@ fn convert_message(message: &super::Message) -> String {
         None => match message.role {
             super::Role::System => "system",
             super::Role::Assistant => "assistant",
-            super::Role::User => "user",
+            super::Role::User(..) => "user",
         },
     });
     buf.push_str("\n");

@@ -5,7 +5,7 @@ pub mod spellbook;
 pub enum Role {
     System,
     Assistant,
-    User,
+    User(String),
 }
 
 #[derive(Debug)]
@@ -13,6 +13,7 @@ pub struct Message {
     pub role: Role,
     pub name: Option<String>,
     pub content: String,
+    pub mentioned: bool,
 }
 
 #[async_trait::async_trait]
