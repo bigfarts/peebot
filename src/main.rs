@@ -14,7 +14,7 @@ enum ThreadMode {
 #[derive(Debug)]
 struct ChatSettings {
     system_message: String,
-    model_settings: ModelSettings,
+    parameters: toml::Value,
 }
 
 static FORGET_EMOJI: &str = "❌";
@@ -35,18 +35,9 @@ impl ChatSettings {
 
         Ok(ChatSettings {
             system_message: parts[0].unwrap().to_string(),
-            model_settings: parts[1].map_or_else(|| Ok(ModelSettings::default()), |v| toml::from_str::<ModelSettings>(v))?,
+            parameters: parts[1].map_or_else(|| Ok(toml::Table::new().into()), |v| toml::from_str::<toml::Value>(v))?,
         })
     }
-}
-
-#[derive(serde::Deserialize, Default, Debug)]
-#[serde(default)]
-struct ModelSettings {
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    frequency_penalty: Option<f64>,
-    presence_penalty: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -707,19 +698,11 @@ impl serenity::client::EventHandler for Handler {
                     (input_tokens, messages)
                 };
 
-                let req = backend::Request {
-                    messages,
-                    temperature: settings.model_settings.temperature,
-                    top_p: settings.model_settings.top_p,
-                    frequency_penalty: settings.model_settings.frequency_penalty,
-                    presence_penalty: settings.model_settings.presence_penalty,
-                    max_tokens: Some(self.config.max_tokens - input_tokens as u32),
-                };
-                log::info!("{} <- {:#?}", backend_name, req);
+                log::info!("{} ({:?}) <- {:#?}", backend_name, settings.parameters, messages);
 
                 let mut typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
 
-                let mut stream = tokio::time::timeout(backend.request_timeout(), backend.request(&req))
+                let mut stream = tokio::time::timeout(backend.request_timeout(), backend.request(&messages, &settings.parameters))
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))??;
 
@@ -1075,10 +1058,6 @@ const fn max_input_tokens_default() -> u32 {
     2048
 }
 
-const fn max_tokens_default() -> u32 {
-    4096
-}
-
 const fn display_name_resolver_cache_size_default() -> usize {
     2000
 }
@@ -1103,9 +1082,6 @@ struct Config {
 
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
-
-    #[serde(default = "max_tokens_default")]
-    max_tokens: u32,
 
     #[serde(default = "display_name_resolver_cache_size_default")]
     display_name_resolver_cache_size: usize,

@@ -60,17 +60,23 @@ struct Response {
     output: String,
 }
 
+#[derive(serde::Deserialize)]
+struct Parameters {}
+
 #[async_trait::async_trait]
 impl super::Backend for Backend {
     async fn request(
         &self,
-        req: &super::Request,
+        messages: &[super::Message],
+        parameters: &toml::Value,
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
+        let _: Parameters = parameters.clone().try_into()?;
+
         let req = Request {
             input: RequestInput {
                 input: format!(
                     "{}<|im_start|>assistant",
-                    req.messages.iter().map(|m| convert_message(m)).collect::<Vec<_>>().join("")
+                    messages.iter().map(|m| convert_message(m)).collect::<Vec<_>>().join("")
                 ),
             },
         };

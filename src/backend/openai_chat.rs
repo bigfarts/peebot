@@ -12,6 +12,15 @@ pub struct Config {
     model: String,
 }
 
+#[derive(serde::Deserialize)]
+struct Parameters {
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub frequency_penalty: Option<f64>,
+    pub presence_penalty: Option<f64>,
+    pub max_tokens: Option<u32>,
+}
+
 impl Backend {
     pub fn new(config: &Config) -> Result<Self, anyhow::Error> {
         Ok(Self {
@@ -42,16 +51,22 @@ fn convert_message(m: &super::Message) -> crate::openai::Message {
 impl super::Backend for Backend {
     async fn request(
         &self,
-        req: &super::Request,
+        messages: &[super::Message],
+        parameters: &toml::Value,
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
+        let parameters: Parameters = parameters.clone().try_into()?;
+
         let req = crate::openai::ChatRequest {
-            messages: req.messages.iter().map(convert_message).collect(),
+            messages: messages.iter().map(convert_message).collect(),
             model: self.model.clone(),
-            temperature: req.temperature,
-            top_p: req.top_p,
-            frequency_penalty: req.frequency_penalty,
-            presence_penalty: req.presence_penalty,
-            max_tokens: req.max_tokens,
+            temperature: parameters.temperature,
+            top_p: parameters.top_p,
+            frequency_penalty: parameters.frequency_penalty,
+            presence_penalty: parameters.presence_penalty,
+            max_tokens: Some(parameters.max_tokens.unwrap_or_else(|| {
+                let input_tokens = self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>();
+                4096 - input_tokens as u32
+            })),
         };
 
         let mut stream = Box::pin(self.client.request(&req).await?);

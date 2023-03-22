@@ -15,21 +15,12 @@ pub struct Message {
     pub content: String,
 }
 
-#[derive(Debug)]
-pub struct Request {
-    pub messages: Vec<Message>,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub frequency_penalty: Option<f64>,
-    pub presence_penalty: Option<f64>,
-    pub max_tokens: Option<u32>,
-}
-
 #[async_trait::async_trait]
 pub trait Backend {
     async fn request(
         &self,
-        req: &Request,
+        messages: &[Message],
+        parameters: &toml::Value,
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error>;
     fn count_message_tokens(&self, message: &Message) -> usize;
     fn num_overhead_tokens(&self) -> usize;
