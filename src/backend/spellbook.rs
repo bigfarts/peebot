@@ -61,6 +61,7 @@ struct Response {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Parameters {}
 
 #[async_trait::async_trait]
