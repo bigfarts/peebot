@@ -182,7 +182,7 @@ struct Handler {
     me_id: parking_lot::Mutex<serenity::model::id::UserId>,
     config: Config,
     parent_channel_id: serenity::model::id::ChannelId,
-    backends: std::collections::HashMap<String, Box<dyn backend::Backend + Send + Sync>>,
+    backends: indexmap::IndexMap<String, Box<dyn backend::Backend + Send + Sync>>,
     thread_cache: tokio::sync::Mutex<ThreadCache>,
     tags: tokio::sync::Mutex<std::collections::HashMap<serenity::model::id::ForumTagId, String>>,
 }
@@ -550,17 +550,15 @@ impl serenity::client::EventHandler for Handler {
 
             let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-            let mut backend_name = if let Some(backend_name) = thread.backend.as_ref() {
-                backend_name
+            let (backend_name, backend) = if let Some((backend_name, backend)) = thread
+                .backend
+                .as_ref()
+                .and_then(|backend_name| self.backends.get(backend_name).map(|backend| (backend_name, backend)))
+                .or_else(|| self.backends.first())
+            {
+                (backend_name, backend)
             } else {
-                &self.config.default_backend
-            };
-
-            let backend = if let Some(backend) = self.backends.get(backend_name) {
-                backend
-            } else {
-                backend_name = &self.config.default_backend;
-                &self.backends[backend_name]
+                return Ok(());
             };
 
             let r = (|| async {
@@ -1072,13 +1070,11 @@ const fn message_history_size_default() -> usize {
 
 #[derive(serde::Deserialize)]
 struct Config {
-    backends: std::collections::HashMap<String, toml::Value>,
+    backends: indexmap::IndexMap<String, toml::Value>,
 
     discord_token: String,
 
     parent_channel_id: u64,
-
-    default_backend: String,
 
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
@@ -1103,7 +1099,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = toml::from_str::<Config>(std::str::from_utf8(&std::fs::read(opts.config)?)?)?;
 
-    let mut backends: std::collections::HashMap<String, Box<dyn backend::Backend + Sync + Send>> = std::collections::HashMap::new();
+    let mut backends: indexmap::IndexMap<String, Box<dyn backend::Backend + Sync + Send>> = indexmap::IndexMap::new();
     for (name, c) in config.backends.iter() {
         backends.insert(
             name.clone(),
