@@ -61,6 +61,7 @@ impl ThreadInfo {
     async fn new(
         http: impl AsRef<serenity::http::Http>,
         id: serenity::model::id::ChannelId,
+        tags: &std::collections::HashMap<serenity::model::id::ForumTagId, String>,
         message_history_size: usize,
     ) -> Result<Self, serenity::Error> {
         let primary_message = id.message(&http, id.0).await?;
@@ -88,31 +89,18 @@ impl ThreadInfo {
             backend: None,
         };
 
-        ti.update_from_tags(&http, &channel).await?;
+        ti.update_from_tags(&channel, &tags);
 
         Ok(ti)
     }
 
-    async fn update_from_tags(
+    fn update_from_tags(
         &mut self,
-        http: impl AsRef<serenity::http::Http>,
         thread: &serenity::model::channel::GuildChannel,
-    ) -> Result<(), serenity::Error> {
-        let parent_channel =
-            if let serenity::model::prelude::Channel::Guild(guild_channel) = http.as_ref().get_channel(thread.parent_id.unwrap().0).await? {
-                guild_channel
-            } else {
-                unreachable!();
-            };
-
-        let available_tags = parent_channel
-            .available_tags
-            .iter()
-            .map(|tag| (tag.id, tag.name.clone()))
-            .collect::<std::collections::HashMap<_, _>>();
-
+        tags: &std::collections::HashMap<serenity::model::id::ForumTagId, String>,
+    ) {
         for tag in thread.applied_tags.iter() {
-            let tag_name = if let Some(tag_name) = available_tags.get(&tag) {
+            let tag_name = if let Some(tag_name) = tags.get(&tag) {
                 tag_name
             } else {
                 continue;
@@ -124,8 +112,6 @@ impl ThreadInfo {
                 self.backend = Some(backend_name.to_string());
             }
         }
-
-        Ok(())
     }
 }
 
@@ -204,6 +190,7 @@ struct Handler {
     parent_channel_id: serenity::model::id::ChannelId,
     backends: std::collections::HashMap<String, Box<dyn backend::Backend + Send + Sync>>,
     thread_cache: tokio::sync::Mutex<ThreadCache>,
+    tags: tokio::sync::Mutex<std::collections::HashMap<serenity::model::id::ForumTagId, String>>,
 }
 
 struct ThreadCache {
@@ -236,6 +223,7 @@ impl ThreadCache {
         &mut self,
         http: impl AsRef<serenity::http::Http>,
         thread_id: serenity::model::id::ChannelId,
+        tags: &std::collections::HashMap<serenity::model::id::ForumTagId, String>,
         message_history_size: usize,
     ) -> Result<Option<std::sync::Arc<tokio::sync::Mutex<ThreadInfo>>>, serenity::Error> {
         if !self.ids.contains(&thread_id) {
@@ -246,7 +234,9 @@ impl ThreadCache {
             return Ok(Some(info.clone()));
         }
 
-        let thread_info = std::sync::Arc::new(tokio::sync::Mutex::new(ThreadInfo::new(http, thread_id, message_history_size).await?));
+        let thread_info = std::sync::Arc::new(tokio::sync::Mutex::new(
+            ThreadInfo::new(http, thread_id, tags, message_history_size).await?,
+        ));
         self.infos.put(thread_id, thread_info.clone());
         Ok(Some(thread_info))
     }
@@ -373,11 +363,51 @@ impl serenity::client::EventHandler for Handler {
                 thread_cache.add(thread.id);
             }
 
+            let parent_channel = if let serenity::model::channel::Channel::Guild(guild_channel) = &guild.channels[&self.parent_channel_id] {
+                guild_channel
+            } else {
+                return Ok(());
+            };
+
+            let mut tags = self.tags.lock().await;
+            *tags = parent_channel
+                .available_tags
+                .iter()
+                .map(|tag| (tag.id, tag.name.clone()))
+                .collect::<std::collections::HashMap<_, _>>();
+
             Ok::<_, anyhow::Error>(())
         })()
         .await
         {
             log::error!("error in guild_create: {:?}", e);
+        }
+    }
+
+    async fn channel_update(&self, _ctx: serenity::client::Context, channel: serenity::model::channel::Channel) {
+        if let Err(e) = (|| async {
+            let channel = if let serenity::model::channel::Channel::Guild(guild_channel) = channel {
+                guild_channel
+            } else {
+                return Ok(());
+            };
+
+            if channel.id != self.parent_channel_id {
+                return Ok(());
+            }
+
+            let mut tags = self.tags.lock().await;
+            *tags = channel
+                .available_tags
+                .iter()
+                .map(|tag| (tag.id, tag.name.clone()))
+                .collect::<std::collections::HashMap<_, _>>();
+
+            Ok::<_, anyhow::Error>(())
+        })()
+        .await
+        {
+            log::error!("error in channel_update: {:?}", e);
         }
     }
 
@@ -400,7 +430,8 @@ impl serenity::client::EventHandler for Handler {
             thread_cache.add(thread.id);
 
             // Optimization only, not strictly required.
-            thread_cache.load(&ctx.http, thread.id, self.config.message_history_size).await?;
+            let tags = self.tags.lock().await;
+            thread_cache.load(&ctx.http, thread.id, &*tags, self.config.message_history_size).await?;
 
             Ok::<_, anyhow::Error>(())
         })()
@@ -410,7 +441,7 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn thread_update(&self, ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
+    async fn thread_update(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
             if !thread.parent_id.map(|thread_id| self.parent_channel_id == thread_id).unwrap_or(false) {
                 return Ok(());
@@ -424,7 +455,8 @@ impl serenity::client::EventHandler for Handler {
                 thread_cache.add(thread.id);
                 if let Some(t) = thread_cache.get(thread.id) {
                     let mut t = t.lock().await;
-                    t.update_from_tags(&ctx.http, &thread).await?;
+                    let tags = self.tags.lock().await;
+                    t.update_from_tags(&thread, &*tags);
                 }
             }
 
@@ -467,8 +499,9 @@ impl serenity::client::EventHandler for Handler {
 
             let thread = {
                 let mut thread_cache = self.thread_cache.lock().await;
+                let tags = self.tags.lock().await;
                 let thread = if let Some(thread) = thread_cache
-                    .load(&ctx.http, new_message.channel_id, self.config.message_history_size)
+                    .load(&ctx.http, new_message.channel_id, &*tags, self.config.message_history_size)
                     .await?
                 {
                     thread
@@ -1114,6 +1147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             resolver,
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
             parent_channel_id: serenity::model::id::ChannelId(config.parent_channel_id),
+            tags: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             config,
             backends,
             thread_cache,
