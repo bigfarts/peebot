@@ -58,7 +58,7 @@ impl super::Backend for Backend {
         let req = Request {
             input: RequestInput {
                 input: format!(
-                    "{}\n<|im_start|>assistant",
+                    "{}<|im_start|>assistant",
                     req.messages.iter().map(|m| convert_message(m)).collect::<Vec<_>>().join("")
                 ),
             },
@@ -75,7 +75,7 @@ impl super::Backend for Backend {
     }
 
     fn num_overhead_tokens(&self) -> usize {
-        2
+        self.tokenizer.encode_ordinary("<|im_start|>assistant").len()
     }
 
     fn request_timeout(&self) -> std::time::Duration {
