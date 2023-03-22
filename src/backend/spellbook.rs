@@ -64,7 +64,15 @@ impl super::Backend for Backend {
             },
         };
 
-        let resp = self.client.post(&self.deployment_url).json(&req).send().await?.json::<Response>().await?;
+        let resp = self.client.post(&self.deployment_url).json(&req).send().await?;
+
+        if let Err(e) = resp.error_for_status_ref() {
+            let body = resp.text().await?;
+            return Err(anyhow::format_err!("{:?} ({:?})", e, body));
+        }
+
+        let resp = resp.json::<Response>().await?;
+
         Ok(Box::pin(async_stream::try_stream! {
             yield resp.output;
         }))

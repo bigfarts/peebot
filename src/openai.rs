@@ -70,8 +70,11 @@ pub struct ChatClient {
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("reqwest: {0}")]
+    #[error("request: {0}")]
     Reqwest(#[from] reqwest::Error),
+
+    #[error("request: {0} ({1})")]
+    ReqwestWithBody(reqwest::Error, String),
 
     #[error("serde: {0}")]
     SerdeJson(#[from] serde_json::Error),
@@ -93,7 +96,7 @@ impl ChatClient {
         }
     }
 
-    pub async fn request(&self, req: &ChatRequest) -> Result<impl futures_core::stream::Stream<Item = Result<Chunk, Error>>, reqwest::Error> {
+    pub async fn request(&self, req: &ChatRequest) -> Result<impl futures_core::stream::Stream<Item = Result<Chunk, Error>>, Error> {
         #[derive(serde::Serialize)]
         struct WrappedRequest<'a> {
             stream: bool,
@@ -106,8 +109,12 @@ impl ChatClient {
             .post("https://api.openai.com/v1/chat/completions")
             .json(&WrappedRequest { stream: true, req })
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+
+        if let Err(e) = resp.error_for_status_ref() {
+            let body = resp.text().await?;
+            return Err(Error::ReqwestWithBody(e, body));
+        }
 
         let mut buf = bytes::BytesMut::new();
 
