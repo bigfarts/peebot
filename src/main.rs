@@ -111,7 +111,7 @@ impl ThreadInfo {
 
             if tag_name == "multi" {
                 self.mode = ThreadMode::Multi;
-            } else if let Some(backend_name) = tag_name.strip_prefix("backend:") {
+            } else if let Some(backend_name) = tag_name.strip_prefix("use ") {
                 self.backend = Some(backend_name.to_string());
             }
         }
