@@ -1,3 +1,4 @@
+mod backend;
 mod openai;
 mod unichunk;
 
@@ -168,9 +169,8 @@ impl Resolver {
 struct Handler {
     resolver: tokio::sync::Mutex<Resolver>,
     me_id: parking_lot::Mutex<serenity::model::id::UserId>,
-    tokenizer: tiktoken_rs::CoreBPE,
     config: Config,
-    chat_client: openai::ChatClient,
+    backend: Box<dyn backend::Backend + Send + Sync>,
     thread_cache: tokio::sync::Mutex<ThreadCache>,
 }
 
@@ -474,8 +474,8 @@ impl serenity::client::EventHandler for Handler {
                 let (input_tokens, messages) = {
                     let mut resolver = self.resolver.lock().await;
 
-                    let system_message = openai::Message {
-                        role: openai::Role::System,
+                    let system_message = backend::Message {
+                        role: backend::Role::System,
                         name: None,
                         content: if thread.mode == ThreadMode::Multi {
                             format!(
@@ -492,7 +492,7 @@ impl serenity::client::EventHandler for Handler {
                     };
 
                     // every reply is primed with <im_start>assistant
-                    let mut input_tokens = 2 + openai::count_message_tokens(&self.tokenizer, &system_message);
+                    let mut input_tokens = 2 + self.backend.count_message_tokens(&system_message);
 
                     let mut messages = vec![];
 
@@ -527,14 +527,14 @@ impl serenity::client::EventHandler for Handler {
                         }
 
                         let oai_message = if message.author.id == me_id {
-                            openai::Message {
-                                role: openai::Role::Assistant,
+                            backend::Message {
+                                role: backend::Role::Assistant,
                                 name: None,
                                 content: message.content.clone(),
                             }
                         } else {
-                            openai::Message {
-                                role: openai::Role::User,
+                            backend::Message {
+                                role: backend::Role::User,
                                 name: None,
                                 content: match thread.mode {
                                     ThreadMode::Single => {
@@ -575,7 +575,7 @@ impl serenity::client::EventHandler for Handler {
                             }
                         };
 
-                        let message_tokens = openai::count_message_tokens(&self.tokenizer, &oai_message);
+                        let message_tokens = self.backend.count_message_tokens(&oai_message);
 
                         if input_tokens + message_tokens > self.config.max_input_tokens as usize {
                             break;
@@ -591,7 +591,7 @@ impl serenity::client::EventHandler for Handler {
                     (input_tokens, messages)
                 };
 
-                let req = openai::ChatRequest {
+                let req = backend::Request {
                     messages,
                     model: "gpt-3.5-turbo".to_owned(),
                     temperature: settings.model_settings.temperature,
@@ -604,24 +604,17 @@ impl serenity::client::EventHandler for Handler {
 
                 let mut typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
 
-                let mut stream = Box::pin(
-                    tokio::time::timeout(std::time::Duration::from_secs(30), self.chat_client.request(&req))
-                        .await
-                        .map_err(|e| anyhow::format_err!("timed out: {}", e))??,
-                );
+                let mut stream = tokio::time::timeout(std::time::Duration::from_secs(30), self.backend.request(&req))
+                    .await
+                    .map_err(|e| anyhow::format_err!("timed out: {}", e))??;
 
                 let mut chunker = unichunk::Chunker::new(2000);
-                while let Some(chunk) = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
+                while let Some(content) = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))?
                 {
-                    let chunk = chunk?;
-                    let delta = &chunk.choices[0].delta;
-                    let content = if let Some(content) = delta.content.as_ref() {
-                        content
-                    } else {
-                        continue;
-                    };
+                    let content = content?;
+
                     for c in chunker.push(&content) {
                         typing.take();
                         new_message
@@ -1010,7 +1003,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = toml::from_str::<Config>(std::str::from_utf8(&std::fs::read(opts.config)?)?)?;
 
-    let chat_client = openai::ChatClient::new(&config.openai_token);
+    let backend = Box::new(backend::openai_chat::Backend::new(
+        openai::ChatClient::new(&config.openai_token),
+        tiktoken_rs::cl100k_base().unwrap(),
+    ));
 
     let intents = serenity::model::gateway::GatewayIntents::default()
         | serenity::model::gateway::GatewayIntents::MESSAGE_CONTENT
@@ -1026,9 +1022,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .event_handler(Handler {
             resolver,
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
-            tokenizer: tiktoken_rs::cl100k_base().unwrap(),
             config,
-            chat_client,
+            backend,
             thread_cache,
         })
         .await?
