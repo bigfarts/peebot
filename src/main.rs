@@ -172,6 +172,7 @@ struct Handler {
     resolver: tokio::sync::Mutex<Resolver>,
     me_id: parking_lot::Mutex<serenity::model::id::UserId>,
     config: Config,
+    forums: std::collections::HashMap<serenity::model::id::ChannelId, String>,
     backends: std::collections::HashMap<String, Box<dyn backend::Backend + Send + Sync>>,
     thread_cache: tokio::sync::Mutex<ThreadCache>,
 }
@@ -331,11 +332,7 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             let mut thread_cache = self.thread_cache.lock().await;
             for thread in guild.threads.iter() {
-                if !thread
-                    .parent_id
-                    .map(|thread_id| self.config.forums.contains_key(&thread_id.0))
-                    .unwrap_or(false)
-                {
+                if !thread.parent_id.map(|thread_id| self.forums.contains_key(&thread_id)).unwrap_or(false) {
                     continue;
                 }
 
@@ -357,11 +354,7 @@ impl serenity::client::EventHandler for Handler {
 
     async fn thread_create(&self, ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
-            if !thread
-                .parent_id
-                .map(|thread_id| self.config.forums.contains_key(&thread_id.0))
-                .unwrap_or(false)
-            {
+            if !thread.parent_id.map(|thread_id| self.forums.contains_key(&thread_id)).unwrap_or(false) {
                 return Ok(());
             }
 
@@ -390,11 +383,7 @@ impl serenity::client::EventHandler for Handler {
 
     async fn thread_update(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
-            if !thread
-                .parent_id
-                .map(|thread_id| self.config.forums.contains_key(&thread_id.0))
-                .unwrap_or(false)
-            {
+            if !thread.parent_id.map(|thread_id| self.forums.contains_key(&thread_id)).unwrap_or(false) {
                 return Ok(());
             }
 
@@ -506,9 +495,8 @@ impl serenity::client::EventHandler for Handler {
             let settings = ChatSettings::new(&thread.primary_message.content)?;
 
             let backend = if let Some(backend) = self
-                .config
                 .forums
-                .get(&thread.parent_channel_id.0)
+                .get(&thread.parent_channel_id)
                 .and_then(|backend_name| self.backends.get(backend_name))
             {
                 backend
@@ -1058,7 +1046,7 @@ struct Config {
 
     discord_token: String,
 
-    forums: std::collections::HashMap<u64, String>,
+    forums: std::collections::HashMap<String, String>,
 
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
@@ -1088,6 +1076,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut backends: std::collections::HashMap<String, Box<dyn backend::Backend + Sync + Send>> = std::collections::HashMap::new();
 
+    // TODO: Don't hardcode these.
     if let Some(openai_chat_backend_config) = config.backends.openai_chat.as_ref() {
         backends.insert(
             "gpt-3.5".to_string(),
@@ -1124,6 +1113,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .event_handler(Handler {
             resolver,
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
+            forums: config
+                .forums
+                .iter()
+                .map(|(k, v)| (serenity::model::id::ChannelId(k.parse().unwrap()), v.clone()))
+                .collect(),
             config,
             backends,
             thread_cache,
