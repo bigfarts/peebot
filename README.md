@@ -6,8 +6,29 @@ peebot is a Discord bot for bringing the horrors of AI chatbots straight to your
 
 ## Supported backends
 
--   **openai_chat:** Use the gpt-3.5-turbo for a ChatGPT-like experience.
--   **spellbook:** You're on your own for this one.
+### openai_chat
+
+Use the gpt-3.5-turbo model for a ChatGPT-like experience.
+
+#### Model parameters
+
+```toml
+# https://platform.openai.com/docs/api-reference/chat/create
+temperature = float         # 0.0...2.0
+top_p = float               # 0.0...1.0
+presence_penalty = float    # -2.0...2.0
+frequency_penalty = float   # -2.0...2.0
+```
+
+### spellbook
+
+You're on your own for this one.
+
+#### Model parameters
+
+```toml
+# None!
+```
 
 ## Setup guide
 
@@ -29,14 +50,14 @@ peebot is a Discord bot for bringing the horrors of AI chatbots straight to your
 
 1. Set up tags in your forum channels, if required. For instance:
 
-    - **multi:** Designates the channel as a multi-user chatroom.
-    - **use [backend name]:** Allows users to select which backend they want to use.
+    - **multi:** Designates the channel as a multi-user chatroom. In multi-user mode, the backend will be prompted with additional contextual information about who said what. Additionally, **all messages will be sent to the backend**, not just ones mentinoing the bot!
+    - **use [backend name]:** Allows users to select which backend they want to use. This should match the backends in the config file.
 
 ## User guide
 
 To get started, create a forum thread. The title of the forum thread doesn't matter, but the first post should be the system prompt to the bot, for instance telling it how to act.
 
-> **Note:** You can include an optional section after the system prompt, split by `---`, for settings.
+> **Note:** You can include an optional section after the system prompt, split by `---`, for model parameters.
 >
 > For instance:
 >
@@ -46,7 +67,7 @@ To get started, create a forum thread. The title of the forum thread doesn't mat
 > temperature = 1.4
 > ```
 >
-> The valid options depend on which backend you've selected, though.
+> The valid parameters depend on which backend you've selected, though. You probably don't need to touch this unless you really know what you're doing.
 
 You can then get the bot to respond by either @mentioning it or replying to one of its message with @ mention on.
 
