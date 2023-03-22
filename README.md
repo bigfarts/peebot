@@ -14,10 +14,11 @@ Use the gpt-3.5-turbo model for a ChatGPT-like experience.
 
 ```toml
 # https://platform.openai.com/docs/api-reference/chat/create
-temperature = float         # 0.0...2.0
-top_p = float               # 0.0...1.0
-presence_penalty = float    # -2.0...2.0
-frequency_penalty = float   # -2.0...2.0
+temperature = 1.0           # 0.0...2.0
+top_p = 1.0                 # 0.0...1.0
+presence_penalty = 0.0      # -2.0...2.0
+frequency_penalty = 0.0     # -2.0...2.0
+max_output_tokens = 4096    # 0...4096
 ```
 
 ### spellbook
