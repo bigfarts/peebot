@@ -333,7 +333,7 @@ impl serenity::client::EventHandler for Handler {
             for thread in guild.threads.iter() {
                 if !thread
                     .parent_id
-                    .map(|thread_id| self.config.parent_channel_ids.contains_key(&thread_id.0))
+                    .map(|thread_id| self.config.forums.contains_key(&thread_id.0))
                     .unwrap_or(false)
                 {
                     continue;
@@ -359,7 +359,7 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             if !thread
                 .parent_id
-                .map(|thread_id| self.config.parent_channel_ids.contains_key(&thread_id.0))
+                .map(|thread_id| self.config.forums.contains_key(&thread_id.0))
                 .unwrap_or(false)
             {
                 return Ok(());
@@ -392,7 +392,7 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             if !thread
                 .parent_id
-                .map(|thread_id| self.config.parent_channel_ids.contains_key(&thread_id.0))
+                .map(|thread_id| self.config.forums.contains_key(&thread_id.0))
                 .unwrap_or(false)
             {
                 return Ok(());
@@ -507,7 +507,7 @@ impl serenity::client::EventHandler for Handler {
 
             let backend = if let Some(backend) = self
                 .config
-                .parent_channel_ids
+                .forums
                 .get(&thread.parent_channel_id.0)
                 .and_then(|backend_name| self.backends.get(backend_name))
             {
@@ -1058,7 +1058,7 @@ struct Config {
 
     discord_token: String,
 
-    parent_channel_ids: std::collections::HashMap<u64, String>,
+    forums: std::collections::HashMap<u64, String>,
 
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
