@@ -564,7 +564,7 @@ impl serenity::client::EventHandler for Handler {
             };
 
             let r = (|| async {
-                let (input_tokens, messages) = {
+                let messages = {
                     let mut resolver = self.resolver.lock().await;
 
                     let system_message = backend::Message {
@@ -695,7 +695,7 @@ impl serenity::client::EventHandler for Handler {
                     messages.push(system_message);
                     messages.reverse();
 
-                    (input_tokens, messages)
+                    messages
                 };
 
                 log::info!("{} ({:?}) <- {:#?}", backend_name, settings.parameters, messages);
