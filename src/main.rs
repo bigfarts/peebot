@@ -99,6 +99,9 @@ impl ThreadInfo {
         thread: &serenity::model::channel::GuildChannel,
         tags: &std::collections::HashMap<serenity::model::id::ForumTagId, String>,
     ) {
+        self.mode = ThreadMode::Single;
+        self.backend = None;
+
         for tag in thread.applied_tags.iter() {
             let tag_name = if let Some(tag_name) = tags.get(&tag) {
                 tag_name
