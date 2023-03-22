@@ -11,16 +11,6 @@ enum ThreadMode {
     Multi,
 }
 
-impl ThreadMode {
-    fn from_channel_name(name: &str) -> Self {
-        if name.to_lowercase().contains("[multi]") {
-            ThreadMode::Multi
-        } else {
-            ThreadMode::Single
-        }
-    }
-}
-
 #[derive(Debug)]
 struct ChatSettings {
     system_message: String,
@@ -65,6 +55,7 @@ struct ThreadInfo {
     primary_message: serenity::model::channel::Message,
     messages: std::collections::BTreeMap<serenity::model::id::MessageId, serenity::model::channel::Message>,
     mode: ThreadMode,
+    backend: Option<String>,
 }
 
 impl ThreadInfo {
@@ -91,12 +82,38 @@ impl ThreadInfo {
             unreachable!();
         };
 
-        Ok(Self {
+        let mut ti = Self {
             parent_channel_id: channel.parent_id.unwrap(),
             primary_message,
             messages,
-            mode: ThreadMode::from_channel_name(&channel.name),
-        })
+            mode: ThreadMode::Single,
+            backend: None,
+        };
+
+        ti.update_from_tags(&channel);
+
+        Ok(ti)
+    }
+
+    fn update_from_tags(&mut self, thread: &serenity::model::channel::GuildChannel) {
+        let available_tags = thread
+            .available_tags
+            .iter()
+            .map(|tag| (tag.id, tag.name.clone()))
+            .collect::<std::collections::HashMap<_, _>>();
+        for tag in thread.applied_tags.iter() {
+            let tag_name = if let Some(tag_name) = available_tags.get(&tag) {
+                tag_name
+            } else {
+                continue;
+            };
+
+            if tag_name == "multi" {
+                self.mode = ThreadMode::Multi;
+            } else if let Some(backend_name) = tag_name.strip_prefix("backend:") {
+                self.backend = Some(backend_name.to_string());
+            }
+        }
     }
 }
 
@@ -172,7 +189,7 @@ struct Handler {
     resolver: tokio::sync::Mutex<Resolver>,
     me_id: parking_lot::Mutex<serenity::model::id::UserId>,
     config: Config,
-    forums: std::collections::HashMap<serenity::model::id::ChannelId, String>,
+    parent_channel_id: serenity::model::id::ChannelId,
     backends: std::collections::HashMap<String, Box<dyn backend::Backend + Send + Sync>>,
     thread_cache: tokio::sync::Mutex<ThreadCache>,
 }
@@ -332,7 +349,7 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             let mut thread_cache = self.thread_cache.lock().await;
             for thread in guild.threads.iter() {
-                if !thread.parent_id.map(|thread_id| self.forums.contains_key(&thread_id)).unwrap_or(false) {
+                if !thread.parent_id.map(|thread_id| self.parent_channel_id == thread_id).unwrap_or(false) {
                     continue;
                 }
 
@@ -354,7 +371,7 @@ impl serenity::client::EventHandler for Handler {
 
     async fn thread_create(&self, ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
-            if !thread.parent_id.map(|thread_id| self.forums.contains_key(&thread_id)).unwrap_or(false) {
+            if !thread.parent_id.map(|thread_id| self.parent_channel_id == thread_id).unwrap_or(false) {
                 return Ok(());
             }
 
@@ -383,7 +400,7 @@ impl serenity::client::EventHandler for Handler {
 
     async fn thread_update(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
-            if !thread.parent_id.map(|thread_id| self.forums.contains_key(&thread_id)).unwrap_or(false) {
+            if !thread.parent_id.map(|thread_id| self.parent_channel_id == thread_id).unwrap_or(false) {
                 return Ok(());
             }
 
@@ -395,7 +412,7 @@ impl serenity::client::EventHandler for Handler {
                 thread_cache.add(thread.id);
                 if let Some(t) = thread_cache.get(thread.id) {
                     let mut t = t.lock().await;
-                    t.mode = ThreadMode::from_channel_name(&thread.name);
+                    t.update_from_tags(&thread);
                 }
             }
 
@@ -494,16 +511,17 @@ impl serenity::client::EventHandler for Handler {
 
             let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-            let backend_name = if let Some(backend_name) = self.forums.get(&thread.parent_channel_id) {
+            let mut backend_name = if let Some(backend_name) = thread.backend.as_ref() {
                 backend_name
             } else {
-                return Ok(());
+                &self.config.default_backend
             };
 
             let backend = if let Some(backend) = self.backends.get(backend_name) {
                 backend
             } else {
-                return Ok(());
+                backend_name = &self.config.default_backend;
+                &self.backends[backend_name]
             };
 
             let r = (|| async {
@@ -1048,7 +1066,9 @@ struct Config {
 
     discord_token: String,
 
-    forums: std::collections::HashMap<String, String>,
+    parent_channel_id: u64,
+
+    default_backend: String,
 
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
@@ -1115,11 +1135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .event_handler(Handler {
             resolver,
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
-            forums: config
-                .forums
-                .iter()
-                .map(|(k, v)| (serenity::model::id::ChannelId(k.parse().unwrap()), v.clone()))
-                .collect(),
+            parent_channel_id: serenity::model::id::ChannelId(config.parent_channel_id),
             config,
             backends,
             thread_cache,

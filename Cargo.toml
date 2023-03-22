@@ -32,3 +32,6 @@ tokio = { version = "1.26.0", features = ["full"] }
 toml = "0.7.3"
 unicode-linebreak = "0.1.4"
 unicode-segmentation = "1.10.1"
+
+[patch.crates-io]
+serenity = { git = 'https://github.com/serenity-rs/serenity', rev = 'f42ec021126fe8bb07158631e871a17ee70acbf2' }
