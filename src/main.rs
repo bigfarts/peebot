@@ -53,6 +53,7 @@ impl ChatSettings {
 #[derive(serde::Deserialize, Default, Debug)]
 #[serde(default)]
 struct ModelSettings {
+    backend: Option<String>,
     temperature: Option<f64>,
     top_p: Option<f64>,
     frequency_penalty: Option<f64>,
@@ -468,11 +469,18 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             }
 
-            let backend = &self.backends[&self.config.default_backend];
+            let settings = ChatSettings::new(&thread.primary_message.content)?;
+
+            let backend = if let Some(backend_name) = settings.model_settings.backend.as_ref() {
+                &self
+                    .backends
+                    .get(backend_name)
+                    .unwrap_or_else(|| &self.backends[&self.config.default_backend])
+            } else {
+                &self.backends[&self.config.default_backend]
+            };
 
             let r = (|| async {
-                let settings = ChatSettings::new(&thread.primary_message.content)?;
-
                 let (input_tokens, messages) = {
                     let mut resolver = self.resolver.lock().await;
 
