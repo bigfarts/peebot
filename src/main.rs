@@ -1040,15 +1040,10 @@ const fn thread_cache_size_default() -> usize {
 const fn message_history_size_default() -> usize {
     2000
 }
-#[derive(serde::Deserialize)]
-struct BackendConfig {
-    r#type: String,
-    config: toml::Value,
-}
 
 #[derive(serde::Deserialize)]
 struct Config {
-    backends: std::collections::HashMap<String, BackendConfig>,
+    backends: std::collections::HashMap<String, toml::Value>,
 
     discord_token: String,
 
@@ -1084,7 +1079,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut backends: std::collections::HashMap<String, Box<dyn backend::Backend + Sync + Send>> = std::collections::HashMap::new();
     for (name, c) in config.backends.iter() {
-        backends.insert(name.clone(), backend::new_backend_from_config(c.r#type.clone(), c.config.clone())?);
+        backends.insert(
+            name.clone(),
+            backend::new_backend_from_config(c.get("type").unwrap().as_str().unwrap().to_string(), c.clone())?,
+        );
     }
 
     let intents = serenity::model::gateway::GatewayIntents::default()
