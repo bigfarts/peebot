@@ -494,11 +494,13 @@ impl serenity::client::EventHandler for Handler {
 
             let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-            let backend = if let Some(backend) = self
-                .forums
-                .get(&thread.parent_channel_id)
-                .and_then(|backend_name| self.backends.get(backend_name))
-            {
+            let backend_name = if let Some(backend_name) = self.forums.get(&thread.parent_channel_id) {
+                backend_name
+            } else {
+                return Ok(());
+            };
+
+            let backend = if let Some(backend) = self.backends.get(backend_name) {
                 backend
             } else {
                 return Ok(());
@@ -647,7 +649,7 @@ impl serenity::client::EventHandler for Handler {
                     presence_penalty: settings.model_settings.presence_penalty,
                     max_tokens: Some(self.config.max_tokens - input_tokens as u32),
                 };
-                log::info!("{:#?}", req);
+                log::info!("{} <- {:#?}", backend_name, req);
 
                 let mut typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
 
