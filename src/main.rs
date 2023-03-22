@@ -88,18 +88,29 @@ impl ThreadInfo {
             backend: None,
         };
 
-        ti.update_from_tags(&channel);
+        ti.update_from_tags(&http, &channel).await?;
 
         Ok(ti)
     }
 
-    fn update_from_tags(&mut self, thread: &serenity::model::channel::GuildChannel) {
-        log::info!("{:?} {:?}", thread.available_tags, thread.applied_tags);
-        let available_tags = thread
+    async fn update_from_tags(
+        &mut self,
+        http: impl AsRef<serenity::http::Http>,
+        thread: &serenity::model::channel::GuildChannel,
+    ) -> Result<(), serenity::Error> {
+        let parent_channel =
+            if let serenity::model::prelude::Channel::Guild(guild_channel) = http.as_ref().get_channel(thread.parent_id.unwrap().0).await? {
+                guild_channel
+            } else {
+                unreachable!();
+            };
+
+        let available_tags = parent_channel
             .available_tags
             .iter()
             .map(|tag| (tag.id, tag.name.clone()))
             .collect::<std::collections::HashMap<_, _>>();
+
         for tag in thread.applied_tags.iter() {
             let tag_name = if let Some(tag_name) = available_tags.get(&tag) {
                 tag_name
@@ -113,6 +124,8 @@ impl ThreadInfo {
                 self.backend = Some(backend_name.to_string());
             }
         }
+
+        Ok(())
     }
 }
 
@@ -397,7 +410,7 @@ impl serenity::client::EventHandler for Handler {
         }
     }
 
-    async fn thread_update(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
+    async fn thread_update(&self, ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
             if !thread.parent_id.map(|thread_id| self.parent_channel_id == thread_id).unwrap_or(false) {
                 return Ok(());
@@ -411,7 +424,7 @@ impl serenity::client::EventHandler for Handler {
                 thread_cache.add(thread.id);
                 if let Some(t) = thread_cache.get(thread.id) {
                     let mut t = t.lock().await;
-                    t.update_from_tags(&thread);
+                    t.update_from_tags(&ctx.http, &thread).await?;
                 }
             }
 
