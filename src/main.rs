@@ -53,7 +53,6 @@ impl ChatSettings {
 #[derive(serde::Deserialize, Default, Debug)]
 #[serde(default)]
 struct ModelSettings {
-    backend: Option<String>,
     temperature: Option<f64>,
     top_p: Option<f64>,
     frequency_penalty: Option<f64>,
@@ -62,6 +61,7 @@ struct ModelSettings {
 
 #[derive(Debug)]
 struct ThreadInfo {
+    parent_channel_id: serenity::model::id::ChannelId,
     primary_message: serenity::model::channel::Message,
     messages: std::collections::BTreeMap<serenity::model::id::MessageId, serenity::model::channel::Message>,
     mode: ThreadMode,
@@ -92,6 +92,7 @@ impl ThreadInfo {
         };
 
         Ok(Self {
+            parent_channel_id: channel.parent_id.unwrap(),
             primary_message,
             messages,
             mode: ThreadMode::from_channel_name(&channel.name),
@@ -330,7 +331,11 @@ impl serenity::client::EventHandler for Handler {
         if let Err(e) = (|| async {
             let mut thread_cache = self.thread_cache.lock().await;
             for thread in guild.threads.iter() {
-                if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
+                if !thread
+                    .parent_id
+                    .map(|thread_id| self.config.parent_channel_ids.contains_key(&thread_id.0))
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
@@ -352,7 +357,11 @@ impl serenity::client::EventHandler for Handler {
 
     async fn thread_create(&self, ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
-            if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
+            if !thread
+                .parent_id
+                .map(|thread_id| self.config.parent_channel_ids.contains_key(&thread_id.0))
+                .unwrap_or(false)
+            {
                 return Ok(());
             }
 
@@ -381,7 +390,11 @@ impl serenity::client::EventHandler for Handler {
 
     async fn thread_update(&self, _ctx: serenity::client::Context, thread: serenity::model::channel::GuildChannel) {
         if let Err(e) = (|| async {
-            if thread.parent_id != Some(serenity::model::id::ChannelId(self.config.parent_channel_id)) {
+            if !thread
+                .parent_id
+                .map(|thread_id| self.config.parent_channel_ids.contains_key(&thread_id.0))
+                .unwrap_or(false)
+            {
                 return Ok(());
             }
 
@@ -492,13 +505,15 @@ impl serenity::client::EventHandler for Handler {
 
             let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-            let backend = if let Some(backend_name) = settings.model_settings.backend.as_ref() {
-                &self
-                    .backends
-                    .get(backend_name)
-                    .unwrap_or_else(|| &self.backends[&self.config.default_backend])
+            let backend = if let Some(backend) = self
+                .config
+                .parent_channel_ids
+                .get(&thread.parent_channel_id.0)
+                .and_then(|backend_name| self.backends.get(backend_name))
+            {
+                backend
             } else {
-                &self.backends[&self.config.default_backend]
+                return Ok(());
             };
 
             let r = (|| async {
@@ -1020,10 +1035,6 @@ const fn message_history_size_default() -> usize {
     2000
 }
 
-fn default_backend_default() -> String {
-    "gpt-3.5".to_owned()
-}
-
 #[derive(serde::Deserialize)]
 struct OpenAIChatBackendConfig {
     api_key: String,
@@ -1045,12 +1056,9 @@ struct BackendsConfig {
 struct Config {
     backends: BackendsConfig,
 
-    #[serde(default = "default_backend_default")]
-    default_backend: String,
-
     discord_token: String,
 
-    parent_channel_id: u64,
+    parent_channel_ids: std::collections::HashMap<u64, String>,
 
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
