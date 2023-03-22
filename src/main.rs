@@ -226,6 +226,7 @@ static STRIP_SINGLE_USER_REGEX: once_cell::sync::Lazy<regex::Regex> =
 
 const FORGET_COMMAND_NAME: &str = "forget";
 const INJECT_COMMAND_NAME: &str = "inject";
+const INJECT_SYSTEM_COMMAND_NAME: &str = "injectsystem";
 
 #[async_trait::async_trait]
 impl serenity::client::EventHandler for Handler {
@@ -241,6 +242,16 @@ impl serenity::client::EventHandler for Handler {
                 .create_application_command(|c| {
                     c.name(INJECT_COMMAND_NAME)
                         .description("Just make me say something directly.")
+                        .create_option(|o| {
+                            o.name("content")
+                                .description("The text to say.")
+                                .kind(serenity::model::application::command::CommandOptionType::String)
+                                .required(true)
+                        })
+                })
+                .create_application_command(|c| {
+                    c.name(INJECT_SYSTEM_COMMAND_NAME)
+                        .description("Inject a new system message.")
                         .create_option(|o| {
                             o.name("content")
                                 .description("The text to say.")
@@ -283,6 +294,16 @@ impl serenity::client::EventHandler for Handler {
                             .await?;
                     }
                     INJECT_COMMAND_NAME => {
+                        let content = if let Some(content) = app_command.data.options.get(0).and_then(|v| v.value.as_ref()).and_then(|v| v.as_str()) {
+                            content
+                        } else {
+                            return Ok(());
+                        };
+                        app_command
+                            .create_interaction_response(&ctx.http, |r| r.interaction_response_data(|d| d.content(content)))
+                            .await?;
+                    }
+                    INJECT_SYSTEM_COMMAND_NAME => {
                         let content = if let Some(content) = app_command.data.options.get(0).and_then(|v| v.value.as_ref()).and_then(|v| v.as_str()) {
                             content
                         } else {
@@ -506,14 +527,17 @@ impl serenity::client::EventHandler for Handler {
                     let mut messages = vec![];
 
                     for (_, message) in thread.messages.iter().rev() {
-                        if message.author.id == me_id {
-                            if let Some(interaction) = message.interaction.as_ref() {
-                                if interaction.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
-                                    && interaction.name == FORGET_COMMAND_NAME
-                                {
-                                    break;
-                                }
-                            }
+                        if message.author.id == me_id
+                            && message
+                                .interaction
+                                .as_ref()
+                                .map(|i| {
+                                    i.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
+                                        && i.name == FORGET_COMMAND_NAME
+                                })
+                                .unwrap_or(false)
+                        {
+                            break;
                         }
 
                         if message.content.is_empty() {
@@ -537,7 +561,19 @@ impl serenity::client::EventHandler for Handler {
 
                         let oai_message = if message.author.id == me_id {
                             backend::Message {
-                                role: backend::Role::Assistant,
+                                role: if message
+                                    .interaction
+                                    .as_ref()
+                                    .map(|i| {
+                                        i.kind == serenity::model::application::interaction::InteractionType::ApplicationCommand
+                                            && i.name == INJECT_SYSTEM_COMMAND_NAME
+                                    })
+                                    .unwrap_or(false)
+                                {
+                                    backend::Role::System
+                                } else {
+                                    backend::Role::Assistant
+                                },
                                 name: None,
                                 content: message.content.clone(),
                             }
