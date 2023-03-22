@@ -170,7 +170,7 @@ struct Handler {
     resolver: tokio::sync::Mutex<Resolver>,
     me_id: parking_lot::Mutex<serenity::model::id::UserId>,
     config: Config,
-    backend: Box<dyn backend::Backend + Send + Sync>,
+    backends: std::collections::HashMap<String, Box<dyn backend::Backend + Send + Sync>>,
     thread_cache: tokio::sync::Mutex<ThreadCache>,
 }
 
@@ -468,6 +468,8 @@ impl serenity::client::EventHandler for Handler {
                 return Ok(());
             }
 
+            let backend = &self.backends[&self.config.default_backend];
+
             let r = (|| async {
                 let settings = ChatSettings::new(&thread.primary_message.content)?;
 
@@ -491,8 +493,7 @@ impl serenity::client::EventHandler for Handler {
                         },
                     };
 
-                    // every reply is primed with <im_start>assistant
-                    let mut input_tokens = 2 + self.backend.count_message_tokens(&system_message);
+                    let mut input_tokens = backend.num_overhead_tokens() + backend.count_message_tokens(&system_message);
 
                     let mut messages = vec![];
 
@@ -575,7 +576,7 @@ impl serenity::client::EventHandler for Handler {
                             }
                         };
 
-                        let message_tokens = self.backend.count_message_tokens(&oai_message);
+                        let message_tokens = backend.count_message_tokens(&oai_message);
 
                         if input_tokens + message_tokens > self.config.max_input_tokens as usize {
                             break;
@@ -593,7 +594,6 @@ impl serenity::client::EventHandler for Handler {
 
                 let req = backend::Request {
                     messages,
-                    model: "gpt-3.5-turbo".to_owned(),
                     temperature: settings.model_settings.temperature,
                     top_p: settings.model_settings.top_p,
                     frequency_penalty: settings.model_settings.frequency_penalty,
@@ -604,12 +604,12 @@ impl serenity::client::EventHandler for Handler {
 
                 let mut typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
 
-                let mut stream = tokio::time::timeout(std::time::Duration::from_secs(30), self.backend.request(&req))
+                let mut stream = tokio::time::timeout(backend.request_timeout(), backend.request(&req))
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))??;
 
                 let mut chunker = unichunk::Chunker::new(2000);
-                while let Some(content) = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
+                while let Some(content) = tokio::time::timeout(backend.chunk_timeout(), stream.next())
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))?
                 {
@@ -976,19 +976,50 @@ const fn message_history_size_default() -> usize {
     2000
 }
 
+fn default_backend_default() -> String {
+    "gpt-3.5".to_owned()
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAIChatBackendConfig {
+    api_key: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SpellbookBackendConfig {
+    api_key: String,
+    deployment_url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BackendsConfig {
+    openai_chat: Option<OpenAIChatBackendConfig>,
+    spellbook: Option<SpellbookBackendConfig>,
+}
+
 #[derive(serde::Deserialize)]
 struct Config {
-    openai_token: String,
+    backends: BackendsConfig,
+
+    #[serde(default = "default_backend_default")]
+    default_backend: String,
+
     discord_token: String,
+
     parent_channel_id: u64,
+
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
+
     #[serde(default = "max_tokens_default")]
     max_tokens: u32,
+
     #[serde(default = "display_name_resolver_cache_size_default")]
     display_name_resolver_cache_size: usize,
+
     #[serde(default = "thread_cache_size_default")]
     thread_cache_size: usize,
+
     #[serde(default = "message_history_size_default")]
     message_history_size: usize,
 }
@@ -1003,10 +1034,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = toml::from_str::<Config>(std::str::from_utf8(&std::fs::read(opts.config)?)?)?;
 
-    let backend = Box::new(backend::openai_chat::Backend::new(
-        openai::ChatClient::new(&config.openai_token),
-        tiktoken_rs::cl100k_base().unwrap(),
-    ));
+    let mut backends: std::collections::HashMap<String, Box<dyn backend::Backend + Sync + Send>> = std::collections::HashMap::new();
+
+    if let Some(openai_chat_backend_config) = config.backends.openai_chat.as_ref() {
+        backends.insert(
+            "gpt-3.5".to_string(),
+            Box::new(backend::openai_chat::Backend::new(
+                openai_chat_backend_config.api_key.clone(),
+                "gpt-3.5-turbo".to_string(),
+                tiktoken_rs::cl100k_base().unwrap(),
+            )),
+        );
+    }
+
+    if let Some(spellbook_backend_config) = config.backends.spellbook.as_ref() {
+        backends.insert(
+            "gpt-4".to_string(),
+            Box::new(backend::spellbook::Backend::new(
+                spellbook_backend_config.api_key.clone(),
+                spellbook_backend_config.deployment_url.clone(),
+                tiktoken_rs::cl100k_base().unwrap(),
+            )),
+        );
+    }
 
     let intents = serenity::model::gateway::GatewayIntents::default()
         | serenity::model::gateway::GatewayIntents::MESSAGE_CONTENT
@@ -1023,7 +1073,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             resolver,
             me_id: parking_lot::Mutex::new(serenity::model::id::UserId::default()),
             config,
-            backend,
+            backends,
             thread_cache,
         })
         .await?

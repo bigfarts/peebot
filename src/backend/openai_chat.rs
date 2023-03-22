@@ -2,12 +2,17 @@ use futures_util::StreamExt;
 
 pub struct Backend {
     client: crate::openai::ChatClient,
+    model: String,
     tokenizer: tiktoken_rs::CoreBPE,
 }
 
 impl Backend {
-    pub fn new(client: crate::openai::ChatClient, tokenizer: tiktoken_rs::CoreBPE) -> Self {
-        Self { client, tokenizer }
+    pub fn new(api_key: String, model: String, tokenizer: tiktoken_rs::CoreBPE) -> Self {
+        Self {
+            client: crate::openai::ChatClient::new(api_key),
+            model,
+            tokenizer,
+        }
     }
 }
 
@@ -31,7 +36,7 @@ impl super::Backend for Backend {
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
         let req = crate::openai::ChatRequest {
             messages: req.messages.iter().map(convert_message).collect(),
-            model: req.model.clone(),
+            model: self.model.clone(),
             temperature: req.temperature,
             top_p: req.top_p,
             frequency_penalty: req.frequency_penalty,
@@ -56,5 +61,17 @@ impl super::Backend for Backend {
 
     fn count_message_tokens(&self, message: &super::Message) -> usize {
         crate::openai::count_message_tokens(&self.tokenizer, &convert_message(message))
+    }
+
+    fn num_overhead_tokens(&self) -> usize {
+        2
+    }
+
+    fn request_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(30)
+    }
+
+    fn chunk_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(30)
     }
 }

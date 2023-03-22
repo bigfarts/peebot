@@ -1,4 +1,5 @@
 pub mod openai_chat;
+pub mod spellbook;
 
 #[derive(Debug)]
 pub enum Role {
@@ -16,7 +17,6 @@ pub struct Message {
 
 #[derive(Debug)]
 pub struct Request {
-    pub model: String,
     pub messages: Vec<Message>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -32,4 +32,7 @@ pub trait Backend {
         req: &Request,
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error>;
     fn count_message_tokens(&self, message: &Message) -> usize;
+    fn num_overhead_tokens(&self) -> usize;
+    fn request_timeout(&self) -> std::time::Duration;
+    fn chunk_timeout(&self) -> std::time::Duration;
 }

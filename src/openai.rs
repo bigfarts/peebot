@@ -88,7 +88,7 @@ impl ChatClient {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
         headers.insert(reqwest::header::AUTHORIZATION, format!("Bearer {}", api_key.as_ref()).parse().unwrap());
-        ChatClient {
+        Self {
             client: reqwest::ClientBuilder::new().default_headers(headers).build().unwrap(),
         }
     }
