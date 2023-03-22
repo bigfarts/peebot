@@ -109,17 +109,18 @@ impl ChatClient {
             .post("https://api.openai.com/v1/chat/completions")
             .json(&WrappedRequest { stream: true, req })
             .send()
-            .await?;
+            .await
+            .map_err(|e| e.without_url())?;
 
         if let Err(e) = resp.error_for_status_ref() {
-            let body = resp.text().await?;
-            return Err(Error::ReqwestWithBody(e, body));
+            let body = resp.text().await.map_err(|e| e.without_url())?;
+            return Err(Error::ReqwestWithBody(e.without_url(), body));
         }
 
         let mut buf = bytes::BytesMut::new();
 
         Ok(async_stream::try_stream! {
-            while let Some(c) = resp.chunk().await? {
+            while let Some(c) = resp.chunk().await.map_err(|e| e.without_url())? {
                 buf.extend_from_slice(&c);
 
                 while let Some(i) = buf.windows(2).position(|x| x == b"\n\n") {

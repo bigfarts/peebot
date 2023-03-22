@@ -64,15 +64,21 @@ impl super::Backend for Backend {
             },
         };
 
-        let resp = self.client.post(&self.deployment_url).json(&req).send().await?;
+        let resp = self
+            .client
+            .post(&self.deployment_url)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| e.without_url())?;
 
         if let Err(e) = resp.error_for_status_ref() {
-            let body = resp.text().await?;
-            return Err(anyhow::format_err!("{:?} ({:?})", e, body));
+            let body = resp.text().await.map_err(|e| e.without_url())?;
+            return Err(anyhow::format_err!("{:?} ({:?})", e.without_url(), body));
         }
 
         Ok(Box::pin(async_stream::try_stream! {
-            yield resp.json::<Response>().await?.output;
+            yield resp.json::<Response>().await.map_err(|e| e.without_url())?.output;
         }))
     }
 
