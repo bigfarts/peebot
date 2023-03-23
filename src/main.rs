@@ -205,8 +205,7 @@ impl ThreadCache {
         }
     }
 
-    fn clear(&mut self) {
-        self.ids.clear();
+    fn flush(&mut self) {
         self.infos.clear();
     }
 
@@ -401,7 +400,7 @@ impl serenity::client::EventHandler for Handler {
             }
 
             let mut thread_cache = self.thread_cache.lock().await;
-            thread_cache.clear();
+            thread_cache.flush();
 
             let mut tags = self.tags.lock().await;
             *tags = channel
