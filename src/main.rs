@@ -205,6 +205,11 @@ impl ThreadCache {
         }
     }
 
+    fn clear(&mut self) {
+        self.ids.clear();
+        self.infos.clear();
+    }
+
     fn add(&mut self, thread_id: serenity::model::id::ChannelId) {
         self.ids.insert(thread_id);
     }
@@ -394,6 +399,9 @@ impl serenity::client::EventHandler for Handler {
             if channel.id != self.parent_channel_id {
                 return Ok(());
             }
+
+            let mut thread_cache = self.thread_cache.lock().await;
+            thread_cache.clear();
 
             let mut tags = self.tags.lock().await;
             *tags = channel
