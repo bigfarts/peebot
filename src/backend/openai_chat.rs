@@ -59,17 +59,16 @@ impl super::Backend for Backend {
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
         let parameters: Parameters = parameters.clone().try_into()?;
 
-        let req = crate::openai::chat::completions::CreateRequest {
-            messages: messages.iter().map(convert_message).collect(),
-            model: self.model.clone(),
-            temperature: parameters.temperature,
-            top_p: parameters.top_p,
-            frequency_penalty: parameters.frequency_penalty,
-            presence_penalty: parameters.presence_penalty,
-            max_tokens: Some(
+        let req = {
+            let mut req = crate::openai::chat::completions::CreateRequest::new(self.model.clone(), messages.iter().map(convert_message).collect());
+            req.temperature = parameters.temperature;
+            req.top_p = parameters.top_p;
+            req.frequency_penalty = parameters.frequency_penalty;
+            req.presence_penalty = parameters.presence_penalty;
+            req.max_tokens = Some(
                 self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
-            ),
-            ..Default::default()
+            );
+            req
         };
 
         let mut stream = Box::pin(self.client.create_chat_completion(&req).await?);

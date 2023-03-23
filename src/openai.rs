@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use futures_util::StreamExt;
 
 pub mod chat;
@@ -60,7 +62,6 @@ fn into_sse_stream(mut resp: reqwest::Response) -> impl futures_core::stream::St
     }
 }
 
-#[allow(dead_code)]
 impl Client {
     pub fn new(api_key: impl AsRef<str>) -> Self {
         let mut headers = reqwest::header::HeaderMap::new();

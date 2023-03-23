@@ -43,7 +43,7 @@ pub struct Chunk {
     pub choices: Vec<Choice>,
 }
 
-#[derive(serde::Serialize, Default, Clone, Debug)]
+#[derive(serde::Serialize, Clone, Debug)]
 pub struct CreateRequest {
     pub model: String,
 
@@ -75,4 +75,22 @@ pub struct CreateRequest {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+}
+
+impl CreateRequest {
+    pub fn new(model: String, messages: Vec<Message>) -> Self {
+        Self {
+            model,
+            messages,
+            temperature: None,
+            top_p: None,
+            n: None,
+            stop: None,
+            max_tokens: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            logit_bias: None,
+            user: None,
+        }
+    }
 }
