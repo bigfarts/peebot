@@ -88,7 +88,27 @@ impl super::Backend for Backend {
     }
 
     fn count_message_tokens(&self, message: &super::Message) -> usize {
-        crate::openai::count_message_tokens(&self.tokenizer, &convert_message(message))
+        // every message follows <im_start>{role/name}\n{content}<im_end>\n
+        let mut n = 4;
+        n += self
+            .tokenizer
+            .encode_ordinary(
+                &serde_plain::to_string(&match message.role {
+                    super::Role::System => crate::openai::chat::completions::Role::System,
+                    super::Role::Assistant => crate::openai::chat::completions::Role::Assistant,
+                    super::Role::User(..) => crate::openai::chat::completions::Role::User,
+                })
+                .unwrap(),
+            )
+            .len();
+        if let Some(name) = message.name.as_ref() {
+            // if there's a name, the role is omitted
+            // role is always required and always 1 token
+            n -= 1;
+            n += self.tokenizer.encode_ordinary(&name).len();
+        }
+        n += self.tokenizer.encode_ordinary(&message.content).len();
+        n
     }
 
     fn num_overhead_tokens(&self) -> usize {

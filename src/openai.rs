@@ -127,23 +127,3 @@ impl Client {
         Ok(self.do_streaming_request("https://api.openai.com/v1/completions", req).await?)
     }
 }
-
-#[allow(dead_code)]
-pub fn count_tokens(tokenizer: &tiktoken_rs::CoreBPE, messages: &[chat::completions::Message]) -> usize {
-    // every reply is primed with <im_start>assistant
-    messages.iter().map(|m| count_message_tokens(tokenizer, m)).sum::<usize>() + 2
-}
-
-pub fn count_message_tokens(tokenizer: &tiktoken_rs::CoreBPE, message: &chat::completions::Message) -> usize {
-    // every message follows <im_start>{role/name}\n{content}<im_end>\n
-    let mut n = 4;
-    n += tokenizer.encode_ordinary(&serde_plain::to_string(&message.role).unwrap()).len();
-    if let Some(name) = message.name.as_ref() {
-        // if there's a name, the role is omitted
-        // role is always required and always 1 token
-        n -= 1;
-        n += tokenizer.encode_ordinary(&name).len();
-    }
-    n += tokenizer.encode_ordinary(&message.content).len();
-    n
-}
