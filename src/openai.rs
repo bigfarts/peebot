@@ -1,71 +1,23 @@
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    System,
-    Assistant,
-    User,
+use futures_util::StreamExt;
+
+pub mod chat;
+pub mod completions;
+
+pub struct Client {
+    client: reqwest::Client,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct Message {
-    pub role: Role,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    pub content: String,
-}
+#[derive(serde::Serialize)]
+struct WrappedRequest<'a, T> {
+    stream: bool,
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-#[serde(rename_all = "snake_case")]
-pub enum FinishReason {
-    Stop,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct Delta {
-    pub role: Option<Role>,
-    pub name: Option<String>,
-    pub content: Option<String>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct Choice {
-    pub delta: Delta,
-    pub index: i64,
-    pub finish_reason: Option<FinishReason>,
+    #[serde(flatten)]
+    req: &'a T,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct StreamError {
     pub error: String,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct Chunk {
-    pub id: String,
-    pub object: String,
-    pub created: i64,
-    pub model: String,
-    pub choices: Vec<Choice>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug)]
-pub struct ChatRequest {
-    pub model: String,
-    pub messages: Vec<Message>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub frequency_penalty: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub presence_penalty: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-}
-
-pub struct ChatClient {
-    client: reqwest::Client,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -86,7 +38,30 @@ pub enum Error {
     MalformedStreamItem(Vec<u8>),
 }
 
-impl ChatClient {
+fn into_sse_stream(mut resp: reqwest::Response) -> impl futures_core::stream::Stream<Item = Result<Vec<u8>, Error>> {
+    let mut buf = bytes::BytesMut::new();
+
+    async_stream::try_stream! {
+        while let Some(c) = resp.chunk().await.map_err(|e| e.without_url())? {
+            buf.extend_from_slice(&c);
+
+            while let Some(i) = buf.windows(2).position(|x| x == b"\n\n") {
+                let payload = buf.split_to(i + 2);
+                let payload = &payload[..payload.len() - 2];
+
+                if !payload.starts_with(b"data: ") {
+                    Err(Error::MalformedStreamItem(payload.to_vec()))?;
+                }
+
+                let payload = &payload[6..];
+                yield payload.to_vec();
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl Client {
     pub fn new(api_key: impl AsRef<str>) -> Self {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
@@ -96,17 +71,18 @@ impl ChatClient {
         }
     }
 
-    pub async fn request(&self, req: &ChatRequest) -> Result<impl futures_core::stream::Stream<Item = Result<Chunk, Error>>, Error> {
-        #[derive(serde::Serialize)]
-        struct WrappedRequest<'a> {
-            stream: bool,
-            #[serde(flatten)]
-            req: &'a ChatRequest,
-        }
-
-        let mut resp = self
+    pub async fn do_streaming_request<Req, Chunk>(
+        &self,
+        url: &str,
+        req: &Req,
+    ) -> Result<impl futures_core::stream::Stream<Item = Result<Chunk, Error>>, Error>
+    where
+        Req: serde::Serialize,
+        Chunk: serde::de::DeserializeOwned,
+    {
+        let resp = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(url)
             .json(&WrappedRequest { stream: true, req })
             .send()
             .await
@@ -117,44 +93,48 @@ impl ChatClient {
             return Err(Error::ReqwestWithBody(e.without_url(), body));
         }
 
-        let mut buf = bytes::BytesMut::new();
-
         Ok(async_stream::try_stream! {
-            while let Some(c) = resp.chunk().await.map_err(|e| e.without_url())? {
-                buf.extend_from_slice(&c);
+            let mut stream = Box::pin(into_sse_stream(resp));
 
-                while let Some(i) = buf.windows(2).position(|x| x == b"\n\n") {
-                    let payload = buf.split_to(i + 2);
-                    let payload = &payload[..payload.len() - 2];
+            while let Some(payload) = stream.next().await {
+                let payload = payload?;
 
-                    if !payload.starts_with(b"data: ") {
-                        Err(Error::MalformedStreamItem(payload.to_vec()))?;
-                    }
-
-                    let payload = &payload[6..];
-                    if payload == b"[DONE]" {
-                        break;
-                    }
-
-                    // Check if there is an error first.
-                    if let Ok(stream_error) = serde_json::from_slice::<StreamError>(payload) {
-                        Err(Error::Stream(stream_error.error))?;
-                    }
-
-                    yield serde_json::from_slice::<Chunk>(payload)?;
+                if payload == b"[DONE]" {
+                    break;
                 }
+
+                // Check if there is an error first.
+                if let Ok(stream_error) = serde_json::from_slice::<StreamError>(&payload) {
+                    Err(Error::Stream(stream_error.error))?;
+                }
+
+                yield serde_json::from_slice::<Chunk>(&payload)?;
             }
         })
+    }
+
+    pub async fn create_chat_completion(
+        &self,
+        req: &chat::completions::CreateRequest,
+    ) -> Result<impl futures_core::stream::Stream<Item = Result<chat::completions::Chunk, Error>>, Error> {
+        Ok(self.do_streaming_request("https://api.openai.com/v1/chat/completions", req).await?)
+    }
+
+    pub async fn create_completion(
+        &self,
+        req: &completions::CreateRequest,
+    ) -> Result<impl futures_core::stream::Stream<Item = Result<completions::Chunk, Error>>, Error> {
+        Ok(self.do_streaming_request("https://api.openai.com/v1/completions", req).await?)
     }
 }
 
 #[allow(dead_code)]
-pub fn count_tokens(tokenizer: &tiktoken_rs::CoreBPE, messages: &[Message]) -> usize {
+pub fn count_tokens(tokenizer: &tiktoken_rs::CoreBPE, messages: &[chat::completions::Message]) -> usize {
     // every reply is primed with <im_start>assistant
     messages.iter().map(|m| count_message_tokens(tokenizer, m)).sum::<usize>() + 2
 }
 
-pub fn count_message_tokens(tokenizer: &tiktoken_rs::CoreBPE, message: &Message) -> usize {
+pub fn count_message_tokens(tokenizer: &tiktoken_rs::CoreBPE, message: &chat::completions::Message) -> usize {
     // every message follows <im_start>{role/name}\n{content}<im_end>\n
     let mut n = 4;
     n += tokenizer.encode_ordinary(&serde_plain::to_string(&message.role).unwrap()).len();

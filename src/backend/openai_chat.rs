@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 
 pub struct Backend {
-    client: crate::openai::ChatClient,
+    client: crate::openai::Client,
     model: String,
     tokenizer: tiktoken_rs::CoreBPE,
     max_total_tokens: u32,
@@ -26,7 +26,7 @@ struct Parameters {
 impl Backend {
     pub fn new(config: &Config) -> Result<Self, anyhow::Error> {
         Ok(Self {
-            client: crate::openai::ChatClient::new(config.api_key.clone()),
+            client: crate::openai::Client::new(config.api_key.clone()),
             model: config.model.clone(),
             tokenizer: if config.model == "gpt-3.5-turbo" {
                 tiktoken_rs::cl100k_base()?
@@ -38,14 +38,14 @@ impl Backend {
     }
 }
 
-fn convert_message(m: &super::Message) -> crate::openai::Message {
-    crate::openai::Message {
+fn convert_message(m: &super::Message) -> crate::openai::chat::completions::Message {
+    crate::openai::chat::completions::Message {
         content: m.content.clone(),
         name: m.name.clone(),
         role: match m.role {
-            super::Role::System => crate::openai::Role::System,
-            super::Role::Assistant => crate::openai::Role::Assistant,
-            super::Role::User(..) => crate::openai::Role::User,
+            super::Role::System => crate::openai::chat::completions::Role::System,
+            super::Role::Assistant => crate::openai::chat::completions::Role::Assistant,
+            super::Role::User(..) => crate::openai::chat::completions::Role::User,
         },
     }
 }
@@ -59,7 +59,7 @@ impl super::Backend for Backend {
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
         let parameters: Parameters = parameters.clone().try_into()?;
 
-        let req = crate::openai::ChatRequest {
+        let req = crate::openai::chat::completions::CreateRequest {
             messages: messages.iter().map(convert_message).collect(),
             model: self.model.clone(),
             temperature: parameters.temperature,
@@ -69,9 +69,10 @@ impl super::Backend for Backend {
             max_tokens: Some(
                 self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
             ),
+            ..Default::default()
         };
 
-        let mut stream = Box::pin(self.client.request(&req).await?);
+        let mut stream = Box::pin(self.client.create_chat_completion(&req).await?);
         Ok(Box::pin(async_stream::try_stream! {
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk?;
