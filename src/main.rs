@@ -400,6 +400,8 @@ impl serenity::client::EventHandler for Handler {
             }
 
             let mut thread_cache = self.thread_cache.lock().await;
+
+            // Changing tags may cause the currenet tags we have to be invalidated. Just flush the cache entirely at ths point.
             thread_cache.flush();
 
             let mut tags = self.tags.lock().await;
