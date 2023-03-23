@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 
 pub mod chat;
 pub mod completions;
+pub mod moderations;
 
 pub struct Client {
     client: reqwest::Client,
@@ -72,7 +73,23 @@ impl Client {
         }
     }
 
-    pub async fn do_streaming_request<Req, Chunk>(
+    async fn do_request<Req, Resp>(&self, url: &str, req: &Req) -> Result<Resp, Error>
+    where
+        Req: serde::Serialize,
+        Resp: serde::de::DeserializeOwned,
+    {
+        Ok(self
+            .client
+            .post(url)
+            .json(&WrappedRequest { stream: true, req })
+            .send()
+            .await
+            .map_err(|e| e.without_url())?
+            .json()
+            .await?)
+    }
+
+    async fn do_streaming_request<Req, Chunk>(
         &self,
         url: &str,
         req: &Req,
@@ -126,5 +143,9 @@ impl Client {
         req: &completions::CreateRequest,
     ) -> Result<impl futures_core::stream::Stream<Item = Result<completions::Chunk, Error>>, Error> {
         Ok(self.do_streaming_request("https://api.openai.com/v1/completions", req).await?)
+    }
+
+    pub async fn create_moderation(&self, req: &moderations::CreateRequest) -> Result<moderations::CreateResponse, Error> {
+        Ok(self.do_request("https://api.openai.com/v1/moderations", req).await?)
     }
 }
