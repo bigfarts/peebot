@@ -78,15 +78,20 @@ impl Client {
         Req: serde::Serialize,
         Resp: serde::de::DeserializeOwned,
     {
-        Ok(self
+        let resp = self
             .client
             .post(url)
             .json(&WrappedRequest { stream: true, req })
             .send()
             .await
-            .map_err(|e| e.without_url())?
-            .json()
-            .await?)
+            .map_err(|e| e.without_url())?;
+
+        if let Err(e) = resp.error_for_status_ref() {
+            let body = resp.text().await.map_err(|e| e.without_url())?;
+            return Err(Error::ReqwestWithBody(e.without_url(), body));
+        }
+
+        Ok(resp.json().await?)
     }
 
     async fn do_streaming_request<Req, Chunk>(
