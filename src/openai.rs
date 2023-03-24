@@ -73,25 +73,26 @@ impl Client {
         }
     }
 
-    async fn do_request<Req, Resp>(&self, url: &str, req: &Req) -> Result<Resp, Error>
+    async fn do_request<Req>(&self, url: &str, req: &Req) -> Result<reqwest::Response, Error>
     where
         Req: serde::Serialize,
-        Resp: serde::de::DeserializeOwned,
     {
-        let resp = self
-            .client
-            .post(url)
-            .json(&WrappedRequest { stream: true, req })
-            .send()
-            .await
-            .map_err(|e| e.without_url())?;
+        let resp = self.client.post(url).json(req).send().await.map_err(|e| e.without_url())?;
 
         if let Err(e) = resp.error_for_status_ref() {
             let body = resp.text().await.map_err(|e| e.without_url())?;
             return Err(Error::ReqwestWithBody(e.without_url(), body));
         }
 
-        Ok(resp.json().await?)
+        Ok(resp)
+    }
+
+    async fn do_simple_request<Req, Resp>(&self, url: &str, req: &Req) -> Result<Resp, Error>
+    where
+        Req: serde::Serialize,
+        Resp: serde::de::DeserializeOwned,
+    {
+        Ok(self.do_request(url, req).await?.json().await?)
     }
 
     async fn do_streaming_request<Req, Chunk>(
@@ -103,18 +104,7 @@ impl Client {
         Req: serde::Serialize,
         Chunk: serde::de::DeserializeOwned,
     {
-        let resp = self
-            .client
-            .post(url)
-            .json(&WrappedRequest { stream: true, req })
-            .send()
-            .await
-            .map_err(|e| e.without_url())?;
-
-        if let Err(e) = resp.error_for_status_ref() {
-            let body = resp.text().await.map_err(|e| e.without_url())?;
-            return Err(Error::ReqwestWithBody(e.without_url(), body));
-        }
+        let resp = self.do_request(url, &WrappedRequest { stream: true, req }).await?;
 
         Ok(async_stream::try_stream! {
             let mut stream = Box::pin(into_sse_stream(resp));
@@ -151,6 +141,6 @@ impl Client {
     }
 
     pub async fn create_moderation(&self, req: &moderations::CreateRequest) -> Result<moderations::CreateResponse, Error> {
-        Ok(self.do_request("https://api.openai.com/v1/moderations", req).await?)
+        Ok(self.do_simple_request("https://api.openai.com/v1/moderations", req).await?)
     }
 }
