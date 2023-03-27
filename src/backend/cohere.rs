@@ -44,7 +44,10 @@ impl Backend {
             model: config.model.clone(),
             max_total_tokens: config.max_total_tokens,
             tokenizer: tiktoken_rs::CoreBPE::new(
-                serde_json::from_slice::<std::collections::HashMap<Vec<u8>, usize, _>>(include_bytes!("cohere/coheretext-50k.json"))?,
+                serde_json::from_slice::<std::collections::HashMap<String, usize>>(include_bytes!("cohere/coheretext-50k.json"))?
+                    .into_iter()
+                    .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                    .collect(),
                 std::collections::HashMap::default(),
                 r"(?:'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+)",
             )?,
