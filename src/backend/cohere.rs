@@ -143,10 +143,10 @@ impl super::Backend for Backend {
     }
 
     fn request_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(2 * 60)
+        std::time::Duration::from_secs(30)
     }
 
     fn chunk_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(2 * 60)
+        std::time::Duration::from_secs(30)
     }
 }
