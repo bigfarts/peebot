@@ -15,7 +15,7 @@ pub struct Config {
 }
 
 #[derive(serde::Deserialize)]
-
+#[serde(deny_unknown_fields)]
 struct Parameters {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,

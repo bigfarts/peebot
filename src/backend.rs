@@ -1,3 +1,4 @@
+pub mod cohere;
 pub mod openai_chat;
 pub mod spellbook;
 
@@ -38,6 +39,10 @@ pub fn new_backend_from_config(typ: String, config: toml::Value) -> Result<Box<d
         "spellbook" => {
             let config = config.try_into()?;
             Box::new(spellbook::Backend::new(&config)?)
+        }
+        "cohere" => {
+            let config = config.try_into()?;
+            Box::new(cohere::Backend::new(&config)?)
         }
         _ => {
             return Err(anyhow::format_err!("unknown backend type: {}", typ));
