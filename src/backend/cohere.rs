@@ -98,7 +98,7 @@ impl super::Backend for Backend {
             p: parameters.p,
             frequency_penalty: parameters.frequency_penalty,
             presence_penalty: parameters.presence_penalty,
-            end_sequences: Some(vec!["user:".to_string()]),
+            end_sequences: Some(vec!["user:".to_string(), "User:".to_string()]),
             stream: true,
             max_tokens: Some(
                 self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
