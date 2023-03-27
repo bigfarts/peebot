@@ -13,11 +13,15 @@ pub struct Config {
 }
 
 fn convert_message(message: &super::Message) -> String {
+    if message.role == super::Role::System {
+        return format!("---\n{}\n---\n", message.content);
+    }
+
     let mut buf = String::new();
     buf.push_str(match message.name.as_ref() {
         Some(name) => &name,
         None => match message.role {
-            super::Role::System => "system",
+            super::Role::System => unreachable!(),
             super::Role::Assistant => "assistant",
             super::Role::User(..) => "user",
         },
@@ -68,6 +72,7 @@ struct Request {
     p: Option<u32>,
     frequency_penalty: Option<f64>,
     presence_penalty: Option<f64>,
+    end_sequences: Option<Vec<String>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -97,6 +102,7 @@ impl super::Backend for Backend {
             p: parameters.p,
             frequency_penalty: parameters.frequency_penalty,
             presence_penalty: parameters.presence_penalty,
+            end_sequences: Some(vec!["user:".to_string()]),
             max_tokens: Some(
                 self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
             ),

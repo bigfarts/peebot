@@ -2,7 +2,7 @@ pub mod cohere;
 pub mod openai_chat;
 pub mod spellbook;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Role {
     System,
     Assistant,
