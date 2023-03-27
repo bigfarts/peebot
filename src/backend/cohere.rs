@@ -72,17 +72,13 @@ struct Request {
     p: Option<u32>,
     frequency_penalty: Option<f64>,
     presence_penalty: Option<f64>,
+    stream: bool,
     end_sequences: Option<Vec<String>>,
 }
 
 #[derive(serde::Deserialize)]
-struct ResponseGeneration {
+struct Chunk {
     text: String,
-}
-
-#[derive(serde::Deserialize)]
-struct Response {
-    generations: Vec<ResponseGeneration>,
 }
 
 #[async_trait::async_trait]
@@ -103,12 +99,13 @@ impl super::Backend for Backend {
             frequency_penalty: parameters.frequency_penalty,
             presence_penalty: parameters.presence_penalty,
             end_sequences: Some(vec!["user:".to_string()]),
+            stream: true,
             max_tokens: Some(
                 self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
             ),
         };
 
-        let resp = self
+        let mut resp = self
             .client
             .post("https://api.cohere.ai/v1/generate")
             .json(&req)
@@ -121,16 +118,19 @@ impl super::Backend for Backend {
             return Err(anyhow::format_err!("{:?} ({:?})", e.without_url(), body));
         }
 
+        let mut buf = bytes::BytesMut::new();
+
         Ok(Box::pin(async_stream::try_stream! {
-            yield resp
-                .json::<Response>()
-                .await
-                .map_err(|e| e.without_url())?
-                .generations
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("no generation"))?
-                .text
-                .clone();
+            while let Some(c) = resp.chunk().await.map_err(|e| e.without_url())? {
+                buf.extend_from_slice(&c);
+
+                while let Some(i) = buf.windows(1).position(|x| x == b"\n") {
+                    let payload = buf.split_to(i + 1);
+                    let payload = &payload[..payload.len() - 1];
+
+                    yield serde_json::from_slice::<Chunk>(payload)?.text;
+                }
+            }
         }))
     }
 
