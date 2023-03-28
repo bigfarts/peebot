@@ -20,16 +20,6 @@ presence_penalty = 0.0      # -2.0...2.0
 frequency_penalty = 0.0     # -2.0...2.0
 ```
 
-### spellbook
-
-You're on your own for this one.
-
-#### Model parameters
-
-```toml
-# None!
-```
-
 ## Setup guide
 
 1. Create a forum channel on your Discord server. The bot should be allowed to embed links and post messages in the forum channel.
