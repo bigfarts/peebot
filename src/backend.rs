@@ -1,5 +1,6 @@
 pub mod cohere;
 pub mod openai_chat;
+pub mod spellbook;
 
 #[derive(Debug, PartialEq)]
 pub enum Role {
@@ -34,6 +35,10 @@ pub fn new_backend_from_config(typ: String, config: toml::Value) -> Result<Box<d
         "openai_chat" => {
             let config = config.try_into()?;
             Box::new(openai_chat::Backend::new(&config)?)
+        }
+        "spellbook" => {
+            let config = config.try_into()?;
+            Box::new(spellbook::Backend::new(&config)?)
         }
         "cohere" => {
             let config = config.try_into()?;
