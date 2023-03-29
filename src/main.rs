@@ -891,8 +891,29 @@ impl serenity::client::EventHandler for Handler {
                 message_reaction
             } else {
                 // Kind of janky, but whatever.
-                static EMPTY_MESSAGE_REACTION: once_cell::sync::Lazy<serenity::model::channel::MessageReaction> =
-                    once_cell::sync::Lazy::new(|| serde_json::from_str("{\"count\": 0, \"me\": false, \"emoji\": {\"name\": \"\"}}").unwrap());
+                static EMPTY_MESSAGE_REACTION: once_cell::sync::Lazy<serenity::model::channel::MessageReaction> = once_cell::sync::Lazy::new(|| {
+                    #[derive(serde::Serialize)]
+                    struct Emoji {
+                        name: String,
+                    }
+
+                    #[derive(serde::Serialize)]
+                    struct MessageReaction {
+                        count: u64,
+                        me: bool,
+                        emoji: Emoji,
+                    }
+
+                    serde_json::from_value(
+                        serde_json::to_value(&MessageReaction {
+                            count: 0,
+                            me: false,
+                            emoji: Emoji { name: "".to_string() },
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap()
+                });
 
                 let mut message_reaction = EMPTY_MESSAGE_REACTION.clone();
                 message_reaction.count = 0;
