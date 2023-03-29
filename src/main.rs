@@ -914,7 +914,6 @@ impl serenity::client::EventHandler for Handler {
                 });
 
                 let mut message_reaction = EMPTY_MESSAGE_REACTION.clone();
-                message_reaction.count = 0;
                 message_reaction.me = reaction
                     .member
                     .and_then(|member| member.user.map(|user| user.id == me_id))
