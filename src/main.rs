@@ -904,14 +904,12 @@ impl serenity::client::EventHandler for Handler {
                         emoji: Emoji,
                     }
 
-                    serde_json::from_value(
-                        serde_json::to_value(&MessageReaction {
-                            count: 0,
-                            me: false,
-                            emoji: Emoji { name: "".to_string() },
-                        })
-                        .unwrap(),
-                    )
+                    serde_json::to_value(&MessageReaction {
+                        count: 0,
+                        me: false,
+                        emoji: Emoji { name: "".to_string() },
+                    })
+                    .and_then(serde_json::from_value)
                     .unwrap()
                 });
 
