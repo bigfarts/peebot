@@ -3,7 +3,6 @@ use futures_util::StreamExt;
 pub struct Backend {
     client: crate::openai::Client,
     model: String,
-    tokenizer: tiktoken_rs::CoreBPE,
     max_total_tokens: u32,
 }
 
@@ -28,11 +27,6 @@ impl Backend {
         Ok(Self {
             client: crate::openai::Client::new(config.api_key.clone()),
             model: config.model.clone(),
-            tokenizer: if config.model == "gpt-3.5-turbo" {
-                tiktoken_rs::cl100k_base()?
-            } else {
-                return Err(anyhow::anyhow!("unknown model"));
-            },
             max_total_tokens: config.max_total_tokens,
         })
     }
@@ -87,27 +81,21 @@ impl super::Backend for Backend {
     }
 
     fn count_message_tokens(&self, message: &super::Message) -> usize {
-        // every message follows <im_start>{role/name}\n{content}<im_end>\n
-        let mut n = 4;
-        n += self
-            .tokenizer
-            .encode_ordinary(
-                &serde_plain::to_string(&match message.role {
+        tiktoken_rs::get_chat_completion_max_tokens(
+            &self.model,
+            &[tiktoken_rs::ChatCompletionRequestMessage {
+                role: serde_plain::to_string(&match message.role {
                     super::Role::System => crate::openai::chat::completions::Role::System,
                     super::Role::Assistant => crate::openai::chat::completions::Role::Assistant,
                     super::Role::User(..) => crate::openai::chat::completions::Role::User,
                 })
                 .unwrap(),
-            )
-            .len();
-        if let Some(name) = message.name.as_ref() {
-            // if there's a name, the role is omitted
-            // role is always required and always 1 token
-            n -= 1;
-            n += self.tokenizer.encode_ordinary(&name).len();
-        }
-        n += self.tokenizer.encode_ordinary(&message.content).len();
-        n
+                content: Some(message.content.clone()),
+                name: message.name.clone(),
+                function_call: None,
+            }],
+        )
+        .unwrap_or(0)
     }
 
     fn num_overhead_tokens(&self) -> usize {
