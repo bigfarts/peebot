@@ -82,7 +82,7 @@ impl super::Backend for Backend {
     }
 
     fn count_message_tokens(&self, message: &super::Message) -> usize {
-        tiktoken_rs::get_chat_completion_max_tokens(
+        tiktoken_rs::num_tokens_from_messages(
             &self.model,
             &[tiktoken_rs::ChatCompletionRequestMessage {
                 role: serde_plain::to_string(&match message.role {
