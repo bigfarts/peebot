@@ -64,6 +64,7 @@ impl super::Backend for Backend {
             );
             req
         };
+        log::info!("openai request: {:?}", req);
 
         let mut stream = Box::pin(self.client.create_chat_completion(&req).await?);
         Ok(Box::pin(async_stream::try_stream! {
