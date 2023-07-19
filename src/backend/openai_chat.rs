@@ -93,9 +93,8 @@ impl super::Backend for Backend {
             (3, 1)
         };
 
-        let mut num_tokens = 0;
-        num_tokens += tokens_per_message;
-        num_tokens += self
+        tokens_per_message + // base tokens
+        self
             .bpe
             .encode_ordinary(
                 &serde_plain::to_string(&match message.role {
@@ -105,14 +104,13 @@ impl super::Backend for Backend {
                 })
                 .unwrap(),
             )
-            .len();
-        num_tokens += self.bpe.encode_ordinary(&message.content).len();
-        if let Some(name) = &message.name {
-            num_tokens += self.bpe.encode_ordinary(name).len();
-            num_tokens = num_tokens.wrapping_add_signed(tokens_per_name);
-        }
-
-        num_tokens
+            .len() + // role
+            if let Some(name) = &message.name { // name
+                self.bpe.encode_ordinary(name).len().wrapping_add_signed(tokens_per_name)
+            } else {
+                0
+            } +
+            self.bpe.encode_ordinary(&message.content).len() // message content
     }
 
     fn num_overhead_tokens(&self) -> usize {
