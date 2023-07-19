@@ -597,7 +597,7 @@ impl serenity::client::EventHandler for Handler {
                         mentioned: false,
                     };
 
-                    let mut input_tokens = backend.num_overhead_tokens() + backend.count_message_tokens(&system_message);
+                    let mut input_tokens = backend.num_overhead_tokens() + backend.count_message_tokens(&[&system_message]);
 
                     let mut messages = vec![];
 
@@ -634,7 +634,7 @@ impl serenity::client::EventHandler for Handler {
                             continue;
                         }
 
-                        let oai_message = if message.author.id == me_id {
+                        let chat_message = if message.author.id == me_id {
                             backend::Message {
                                 role: if message
                                     .interaction
@@ -702,13 +702,13 @@ impl serenity::client::EventHandler for Handler {
                             }
                         };
 
-                        let message_tokens = backend.count_message_tokens(&oai_message);
+                        let message_tokens = backend.count_message_tokens(&[&chat_message]);
 
                         if input_tokens + message_tokens > *max_input_tokens as usize {
                             break;
                         }
 
-                        messages.push(oai_message);
+                        messages.push(chat_message);
                         input_tokens += message_tokens;
                     }
 
@@ -722,9 +722,12 @@ impl serenity::client::EventHandler for Handler {
 
                 let mut typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
 
-                let mut stream = tokio::time::timeout(backend.request_timeout(), backend.request(&messages, &settings.parameters))
-                    .await
-                    .map_err(|e| anyhow::format_err!("timed out: {}", e))??;
+                let mut stream = tokio::time::timeout(
+                    backend.request_timeout(),
+                    backend.request(&messages.iter().collect::<Vec<_>>(), &settings.parameters),
+                )
+                .await
+                .map_err(|e| anyhow::format_err!("timed out: {}", e))??;
 
                 let mut chunker = unichunk::Chunker::new(2000);
                 while let Some(content) = tokio::time::timeout(backend.chunk_timeout(), stream.next())

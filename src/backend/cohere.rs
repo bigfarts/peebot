@@ -85,7 +85,7 @@ struct Chunk {
 impl super::Backend for Backend {
     async fn request(
         &self,
-        messages: &[super::Message],
+        messages: &[&super::Message],
         parameters: &toml::Value,
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
         let parameters: Parameters = parameters.clone().try_into()?;
@@ -100,9 +100,7 @@ impl super::Backend for Backend {
             presence_penalty: parameters.presence_penalty,
             end_sequences: Some(vec!["user:".to_string(), "User:".to_string()]),
             stream: true,
-            max_tokens: Some(
-                self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
-            ),
+            max_tokens: Some(self.max_total_tokens - (self.num_overhead_tokens() + self.count_message_tokens(messages)) as u32),
         };
 
         let mut resp = self
@@ -134,8 +132,8 @@ impl super::Backend for Backend {
         }))
     }
 
-    fn count_message_tokens(&self, message: &super::Message) -> usize {
-        self.tokenizer.encode_ordinary(&convert_message(message)).len()
+    fn count_message_tokens(&self, messages: &[&super::Message]) -> usize {
+        messages.iter().map(|m| self.tokenizer.encode_ordinary(&convert_message(m)).len()).sum()
     }
 
     fn num_overhead_tokens(&self) -> usize {
