@@ -48,19 +48,20 @@ fn convert_message(m: &super::Message) -> crate::openai::chat::completions::Mess
 impl super::Backend for Backend {
     async fn request(
         &self,
-        messages: &[&super::Message],
+        messages: &[super::Message],
         parameters: &toml::Value,
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
         let parameters: Parameters = parameters.clone().try_into()?;
 
         let req = {
-            let mut req =
-                crate::openai::chat::completions::CreateRequest::new(self.model.clone(), messages.iter().map(|m| convert_message(*m)).collect());
+            let mut req = crate::openai::chat::completions::CreateRequest::new(self.model.clone(), messages.iter().map(convert_message).collect());
             req.temperature = parameters.temperature;
             req.top_p = parameters.top_p;
             req.frequency_penalty = parameters.frequency_penalty;
             req.presence_penalty = parameters.presence_penalty;
-            req.max_tokens = Some(self.max_total_tokens - (self.num_overhead_tokens() + self.count_message_tokens(messages)) as u32);
+            req.max_tokens = Some(
+                self.max_total_tokens - (self.num_overhead_tokens() + messages.iter().map(|m| self.count_message_tokens(m)).sum::<usize>()) as u32,
+            );
             req
         };
         log::info!("openai request: {:?}", req);
@@ -80,23 +81,20 @@ impl super::Backend for Backend {
         }))
     }
 
-    fn count_message_tokens(&self, messages: &[&super::Message]) -> usize {
+    fn count_message_tokens(&self, message: &super::Message) -> usize {
         tiktoken_rs::num_tokens_from_messages(
             &self.model,
-            &messages
-                .into_iter()
-                .map(|message| tiktoken_rs::ChatCompletionRequestMessage {
-                    role: serde_plain::to_string(&match message.role {
-                        super::Role::System => crate::openai::chat::completions::Role::System,
-                        super::Role::Assistant => crate::openai::chat::completions::Role::Assistant,
-                        super::Role::User(..) => crate::openai::chat::completions::Role::User,
-                    })
-                    .unwrap(),
-                    content: Some(message.content.clone()),
-                    name: message.name.clone(),
-                    function_call: None,
+            &[tiktoken_rs::ChatCompletionRequestMessage {
+                role: serde_plain::to_string(&match message.role {
+                    super::Role::System => crate::openai::chat::completions::Role::System,
+                    super::Role::Assistant => crate::openai::chat::completions::Role::Assistant,
+                    super::Role::User(..) => crate::openai::chat::completions::Role::User,
                 })
-                .collect::<Vec<_>>(),
+                .unwrap(),
+                content: Some(message.content.clone()),
+                name: message.name.clone(),
+                function_call: None,
+            }],
         )
         .unwrap_or(0)
     }
