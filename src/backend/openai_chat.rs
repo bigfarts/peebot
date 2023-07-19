@@ -4,6 +4,7 @@ pub struct Backend {
     client: crate::openai::Client,
     model: String,
     max_total_tokens: u32,
+    bpe: tiktoken_rs::CoreBPE,
 }
 
 #[derive(serde::Deserialize)]
@@ -28,6 +29,7 @@ impl Backend {
             client: crate::openai::Client::new(config.api_key.clone()),
             model: config.model.clone(),
             max_total_tokens: config.max_total_tokens,
+            bpe: tiktoken_rs::get_bpe_from_model(&config.model)?,
         })
     }
 }
@@ -82,25 +84,39 @@ impl super::Backend for Backend {
     }
 
     fn count_message_tokens(&self, message: &super::Message) -> usize {
-        tiktoken_rs::num_tokens_from_messages(
-            &self.model,
-            &[tiktoken_rs::ChatCompletionRequestMessage {
-                role: serde_plain::to_string(&match message.role {
+        let (tokens_per_message, tokens_per_name) = if self.model.starts_with("gpt-3.5") {
+            (
+                4,       // every message follows <im_start>{role/name}\n{content}<im_end>\n
+                -1isize, // if there's a name, the role is omitted
+            )
+        } else {
+            (3, 1)
+        };
+
+        let mut num_tokens = 0;
+        num_tokens += tokens_per_message;
+        num_tokens += self
+            .bpe
+            .encode_ordinary(
+                &serde_plain::to_string(&match message.role {
                     super::Role::System => crate::openai::chat::completions::Role::System,
                     super::Role::Assistant => crate::openai::chat::completions::Role::Assistant,
                     super::Role::User(..) => crate::openai::chat::completions::Role::User,
                 })
                 .unwrap(),
-                content: Some(message.content.clone()),
-                name: message.name.clone(),
-                function_call: None,
-            }],
-        )
-        .unwrap_or(0)
+            )
+            .len();
+        num_tokens += self.bpe.encode_ordinary(&message.content).len();
+        if let Some(name) = &message.name {
+            num_tokens += self.bpe.encode_ordinary(name).len();
+            num_tokens = num_tokens.wrapping_add_signed(tokens_per_name);
+        }
+
+        num_tokens
     }
 
     fn num_overhead_tokens(&self) -> usize {
-        2
+        3 // every reply is primed with <|start|>assistant<|message|>
     }
 
     fn request_timeout(&self) -> std::time::Duration {
