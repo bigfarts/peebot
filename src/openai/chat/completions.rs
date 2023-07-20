@@ -14,11 +14,13 @@ pub struct Message {
     pub content: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Length,
     Stop,
+    FunctionCall,
+    ContentFilter,
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]

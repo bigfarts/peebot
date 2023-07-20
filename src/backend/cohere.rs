@@ -87,7 +87,8 @@ impl super::Backend for Backend {
         &self,
         messages: &[super::Message],
         parameters: &toml::Value,
-    ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
+    ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, crate::backend::RequestStreamError>> + Send>>, anyhow::Error>
+    {
         let parameters: Parameters = parameters.clone().try_into()?;
 
         let req = Request {
@@ -121,14 +122,14 @@ impl super::Backend for Backend {
         let mut buf = bytes::BytesMut::new();
 
         Ok(Box::pin(async_stream::try_stream! {
-            while let Some(c) = resp.chunk().await.map_err(|e| e.without_url())? {
+            while let Some(c) = resp.chunk().await.map_err(|e| crate::backend::RequestStreamError::Other(e.without_url().into()))? {
                 buf.extend_from_slice(&c);
 
                 while let Some(i) = buf.windows(1).position(|x| x == b"\n") {
                     let payload = buf.split_to(i + 1);
                     let payload = &payload[..payload.len() - 1];
 
-                    yield serde_json::from_slice::<Chunk>(payload)?.text;
+                    yield serde_json::from_slice::<Chunk>(payload).map_err(|e| crate::backend::RequestStreamError::Other(e.into()))?.text;
                 }
             }
         }))

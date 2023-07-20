@@ -16,13 +16,25 @@ pub struct Message {
     pub mentioned: bool,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum RequestStreamError {
+    #[error("content filter")]
+    ContentFilter,
+
+    #[error("length")]
+    Length,
+
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
+
 #[async_trait::async_trait]
 pub trait Backend {
     async fn request(
         &self,
         messages: &[Message],
         parameters: &toml::Value,
-    ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error>;
+    ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, RequestStreamError>> + Send>>, anyhow::Error>;
     fn count_message_tokens(&self, message: &Message) -> usize;
     fn num_overhead_tokens(&self) -> usize;
     fn request_timeout(&self) -> std::time::Duration;

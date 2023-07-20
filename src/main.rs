@@ -726,12 +726,19 @@ impl serenity::client::EventHandler for Handler {
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))??;
 
+                let mut stream_error = None;
                 let mut chunker = unichunk::Chunker::new(2000);
                 while let Some(content) = tokio::time::timeout(backend.chunk_timeout(), stream.next())
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))?
                 {
-                    let content = content?;
+                    let content = match content {
+                        Ok(content) => content,
+                        Err(e) => {
+                            stream_error = Some(e);
+                            break;
+                        }
+                    };
 
                     for c in chunker.push(&content) {
                         typing.take();
@@ -753,6 +760,30 @@ impl serenity::client::EventHandler for Handler {
                         .send_message(&ctx.http, |m| m.content(&c).reference_message(&new_message))
                         .await
                         .map_err(|e| anyhow::format_err!("send_message: {}", e))?;
+                }
+
+                if let Some(stream_error) = stream_error {
+                    new_message
+                        .channel_id
+                        .send_message(&ctx.http, |m| {
+                            m.embed(|em| {
+                                em.title("Incomplete response")
+                                    .color(serenity::utils::colours::css::WARNING)
+                                    .description(&match stream_error {
+                                        backend::RequestStreamError::ContentFilter => {
+                                            "The remainder of this response was truncated due to the content filter.".to_string()
+                                        }
+                                        backend::RequestStreamError::Length => {
+                                            "The remainder of this response was truncated due to the length.".to_string()
+                                        }
+                                        backend::RequestStreamError::Other(e) => {
+                                            format!("The remainder of this response was truncated due to an unexpected error: {}", e)
+                                        }
+                                    })
+                            })
+                        })
+                        .await
+                        .map_err(|send_e| anyhow::format_err!("send error: {}", send_e))?;
                 }
 
                 Ok::<_, anyhow::Error>(())

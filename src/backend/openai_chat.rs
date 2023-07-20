@@ -52,7 +52,8 @@ impl super::Backend for Backend {
         &self,
         messages: &[super::Message],
         parameters: &toml::Value,
-    ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, anyhow::Error>> + Send>>, anyhow::Error> {
+    ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, crate::backend::RequestStreamError>> + Send>>, anyhow::Error>
+    {
         let parameters: Parameters = parameters.clone().try_into()?;
 
         let req = {
@@ -71,8 +72,27 @@ impl super::Backend for Backend {
         let mut stream = Box::pin(self.client.create_chat_completion(&req).await?);
         Ok(Box::pin(async_stream::try_stream! {
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                let delta = &chunk.choices[0].delta;
+                let chunk = chunk.map_err(|e| crate::backend::RequestStreamError::Other(e.into()))?;
+                let choice = &chunk.choices[0];
+
+                if let Some(finish_reason) = &choice.finish_reason {
+                    match *finish_reason {
+                        crate::openai::chat::completions::FinishReason::Length => {
+                            Err(crate::backend::RequestStreamError::Length)?;
+                        },
+                        crate::openai::chat::completions::FinishReason::ContentFilter => {
+                            Err(crate::backend::RequestStreamError::ContentFilter)?;
+                        },
+                        crate::openai::chat::completions::FinishReason::FunctionCall => {
+                            Err(crate::backend::RequestStreamError::Other(anyhow::anyhow!("unexpected function_call")))?;
+                        },
+                        crate::openai::chat::completions::FinishReason::Stop => {
+                            break;
+                        },
+                    }
+                }
+
+                let delta = &choice.delta;
                 let content = if let Some(content) = delta.content.as_ref() {
                     content
                 } else {
