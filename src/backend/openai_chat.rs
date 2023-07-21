@@ -136,12 +136,4 @@ impl super::Backend for Backend {
     fn num_overhead_tokens(&self) -> usize {
         3 // every reply is primed with <|start|>assistant<|message|>
     }
-
-    fn request_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(30)
-    }
-
-    fn chunk_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(30)
-    }
 }

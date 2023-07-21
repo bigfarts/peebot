@@ -142,12 +142,4 @@ impl super::Backend for Backend {
     fn num_overhead_tokens(&self) -> usize {
         self.tokenizer.encode_ordinary("assistant:").len()
     }
-
-    fn request_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(30)
-    }
-
-    fn chunk_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(30)
-    }
 }

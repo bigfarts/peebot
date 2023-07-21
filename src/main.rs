@@ -179,6 +179,8 @@ impl Resolver {
 
 struct BackendBinding {
     max_input_tokens: u32,
+    request_timeout: std::time::Duration,
+    chunk_timeout: std::time::Duration,
     backend: Box<dyn backend::Backend + Send + Sync>,
 }
 
@@ -564,7 +566,15 @@ impl serenity::client::EventHandler for Handler {
 
             let settings = ChatSettings::new(&thread.primary_message.content)?;
 
-            let (backend_name, BackendBinding { backend, max_input_tokens }) = if let Some((backend_name, backend)) = thread
+            let (
+                backend_name,
+                BackendBinding {
+                    backend,
+                    request_timeout,
+                    chunk_timeout,
+                    max_input_tokens,
+                },
+            ) = if let Some((backend_name, backend)) = thread
                 .backend
                 .as_ref()
                 .and_then(|backend_name| self.backends.get(backend_name).map(|backend| (backend_name, backend)))
@@ -722,13 +732,13 @@ impl serenity::client::EventHandler for Handler {
 
                 let mut typing = Some(new_message.channel_id.start_typing(&ctx.http)?);
 
-                let mut stream = tokio::time::timeout(backend.request_timeout(), backend.request(&messages, &settings.parameters))
+                let mut stream = tokio::time::timeout(*request_timeout, backend.request(&messages, &settings.parameters))
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))??;
 
                 let mut stream_error = None;
                 let mut chunker = unichunk::Chunker::new(2000);
-                while let Some(content) = tokio::time::timeout(backend.chunk_timeout(), stream.next())
+                while let Some(content) = tokio::time::timeout(*chunk_timeout, stream.next())
                     .await
                     .map_err(|e| anyhow::format_err!("timed out: {}", e))?
                 {
@@ -1127,6 +1137,14 @@ const fn max_input_tokens_default() -> u32 {
     2048
 }
 
+const fn request_timeout_default() -> std::time::Duration {
+    std::time::Duration::from_secs(30)
+}
+
+const fn chunk_timeout_default() -> std::time::Duration {
+    std::time::Duration::from_secs(30)
+}
+
 const fn display_name_resolver_cache_size_default() -> usize {
     2000
 }
@@ -1145,6 +1163,12 @@ struct BackendConfig {
 
     #[serde(default = "max_input_tokens_default")]
     max_input_tokens: u32,
+
+    #[serde(default = "request_timeout_default")]
+    request_timeout: std::time::Duration,
+
+    #[serde(default = "chunk_timeout_default")]
+    chunk_timeout: std::time::Duration,
 
     #[serde(flatten)]
     rest: toml::Value,
@@ -1184,6 +1208,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             name.clone(),
             BackendBinding {
                 max_input_tokens: c.max_input_tokens,
+                request_timeout: c.request_timeout,
+                chunk_timeout: c.chunk_timeout,
                 backend: backend::new_backend_from_config(c.r#type.clone(), c.rest.clone())?,
             },
         );

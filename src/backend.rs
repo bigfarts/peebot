@@ -37,8 +37,6 @@ pub trait Backend {
     ) -> Result<std::pin::Pin<Box<dyn futures_core::stream::Stream<Item = Result<String, RequestStreamError>> + Send>>, anyhow::Error>;
     fn count_message_tokens(&self, message: &Message) -> usize;
     fn num_overhead_tokens(&self) -> usize;
-    fn request_timeout(&self) -> std::time::Duration;
-    fn chunk_timeout(&self) -> std::time::Duration;
 }
 
 pub fn new_backend_from_config(typ: String, config: toml::Value) -> Result<Box<dyn Backend + Send + Sync>, anyhow::Error> {
