@@ -526,9 +526,9 @@ impl serenity::client::EventHandler for Handler {
                 && (new_message.kind == serenity::model::channel::MessageType::Regular
                     || new_message.kind == serenity::model::channel::MessageType::InlineReply);
 
-            let can_reply = thread.try_lock().is_ok();
-
-            if should_reply && !can_reply {
+            let mut thread = if let Ok(thread) = thread.try_lock() {
+                thread
+            } else if should_reply {
                 ctx.http.delete_message(new_message.channel_id.0, new_message.id.0).await?;
                 new_message
                     .channel_id
@@ -551,9 +551,9 @@ impl serenity::client::EventHandler for Handler {
                     })
                     .await?;
                 return Ok(());
-            }
-
-            let mut thread = thread.lock().await;
+            } else {
+                thread.lock().await
+            };
 
             while thread.messages.len() >= self.config.message_history_size {
                 thread.messages.pop_first();
