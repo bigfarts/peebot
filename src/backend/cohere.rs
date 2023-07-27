@@ -78,7 +78,7 @@ struct Request {
 
 #[derive(serde::Deserialize)]
 struct Chunk {
-    text: String,
+    text: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -129,7 +129,12 @@ impl super::Backend for Backend {
                     let payload = buf.split_to(i + 1);
                     let payload = &payload[..payload.len() - 1];
 
-                    yield serde_json::from_slice::<Chunk>(payload).map_err(|e| crate::backend::RequestStreamError::Other(e.into()))?.text;
+                    let text = if let Some(text) = serde_json::from_slice::<Chunk>(payload).map_err(|e| crate::backend::RequestStreamError::Other(e.into()))?.text {
+                        text
+                    } else {
+                        break;
+                    };
+                    yield text;
                 }
             }
         }))
